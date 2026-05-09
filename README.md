@@ -1,8 +1,10 @@
 # claude-proxy
 
-把 Claude Code 路由到任意 Anthropic 兼容代理的 PowerShell 启动脚本。
+把 Claude Code 路由到任意 AI 提供商的 PowerShell 启动脚本。
 
-支持 MiMo、DeepSeek、OpenRouter 或任何兼容 Anthropic API 的自建代理。
+支持两种协议：
+- **Anthropic 格式**：直连（MiMo、OpenRouter 等）
+- **OpenAI 格式**：自动通过 LiteLLM 转换（DeepSeek、Moonshot、通义千问等）
 
 ## 快速开始
 
@@ -17,14 +19,18 @@
 ## 用法
 
 ```powershell
-# 使用默认 provider（mimo）
+# 使用默认 provider（mimo，Anthropic 格式直连）
 .\claude-proxy.ps1
+
+# OpenAI 格式 provider（自动启动 LiteLLM 转换）
+.\claude-proxy.ps1 -Provider deepseek
+.\claude-proxy.ps1 -Provider moonshot
 
 # 指定 provider
 .\claude-proxy.ps1 -Provider mimo
 
-# 临时用自定义端点
-.\claude-proxy.ps1 -Provider custom -BaseUrl "https://your-proxy.com/anthropic" -ApiKey "sk-xxx" -Model "your-model"
+# 临时用自定义端点（OpenAI 格式）
+.\claude-proxy.ps1 -Provider custom -BaseUrl "https://api.example.com/v1" -ApiKey "sk-xxx" -Model "xxx" -Protocol openai
 
 # 覆盖模型
 .\claude-proxy.ps1 -Provider mimo -Model mimo-v2-flash
@@ -39,34 +45,63 @@
 .\claude-proxy.ps1 -WorkDir "C:\my\project"
 ```
 
+## 协议转换原理
+
+对于只提供 OpenAI 格式 API 的 provider，脚本会自动：
+
+```
+Claude Code → Anthropic 协议 → LiteLLM (本地) → OpenAI 协议 → 目标 AI
+```
+
+- 自动检测 Python 和 LiteLLM 是否可用
+- 首次使用自动安装 LiteLLM（`pip install litellm`）
+- 自动启动本地代理，选空闲端口
+- Claude Code 退出时自动清理代理进程
+
 ## 添加新 provider
 
-编辑脚本里的 `$PROVIDERS` 哈希表，复制一个块填入你的值：
+编辑脚本里的 `$PROVIDERS` 哈希表：
 
 ```powershell
-$PROVIDERS = @{
-    "my-provider" = @{
-        baseUrl   = "https://api.example.com/anthropic"
-        apiKey    = "sk-your-key"
-        model     = "your-model-name"
-        smallFast = "your-model-name"
-        label     = "显示名称"
-    }
+# Anthropic 格式（直连）
+"my-anthropic-provider" = @{
+    baseUrl   = "https://api.example.com/anthropic"
+    apiKey    = "sk-your-key"
+    model     = "your-model"
+    smallFast = "your-model"
+    label     = "显示名称"
+    protocol  = "anthropic"
+}
+
+# OpenAI 格式（自动 LiteLLM 转换）
+"my-openai-provider" = @{
+    baseUrl   = "https://api.example.com/v1"
+    apiKey    = "sk-your-key"
+    model     = "your-model"
+    smallFast = "your-model"
+    label     = "显示名称"
+    protocol  = "openai"
 }
 ```
 
-## 已测试的代理服务
+## 预置 Provider
 
-| Provider | Endpoint | 说明 |
-|----------|----------|------|
-| MiMo | `https://token-plan-cn.xiaomimimo.com/anthropic` | 小米 MiMo，国内直连 |
-| DeepSeek | `https://api.deepseek.com/anthropic` | DeepSeek（需自行确认兼容性） |
-| OpenRouter | `https://openrouter.ai/api/v1/anthropic` | 多模型聚合 |
-| 自建 | `http://localhost:8080/anthropic` | LiteLLM / OneAPI 等 |
+| Provider | 协议 | 说明 |
+|----------|------|------|
+| MiMo | Anthropic | 小米 MiMo，国内直连 |
+| DeepSeek | OpenAI | DeepSeek V3/R1 |
+| Moonshot | OpenAI | 月之暗面 Kimi |
+| 智谱 GLM | OpenAI | 智谱 AI |
+| 通义千问 | OpenAI | 阿里云 DashScope |
+| 百川智能 | OpenAI | Baichuan |
+| OpenRouter | Anthropic | 多模型聚合 |
+| 本地 OpenAI | OpenAI | Ollama 等本地模型 |
 
 ## 注意事项
 
 - 环境变量是进程级别的，不会影响你全局的 `claude` 命令
 - 默认每个 provider 使用独立配置目录（`~/.claude-<provider>`）
+- OpenAI 格式的 provider 需要 Python + pip（LiteLLM 依赖）
+- LiteLLM 日志位于 `%TEMP%\litellm-*.log`，出错时可查看
 - 需要 PowerShell 执行权限，如遇报错运行：`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
 - 启动后输入 `/model` 可验证代理是否生效
