@@ -1,0 +1,12 @@
+# 本地 API key 配置，绝不入库
+.env
+.env.*
+
+# 编辑器临时文件
+*.swp
+*~
+.vscode/
+.idea/
+
+# LiteLLM 日志（正常应该落在 %TEMP%，这里兜底）
+litellm-*.log

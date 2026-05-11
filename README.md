@@ -6,15 +6,21 @@
 - **Anthropic 格式**：直连（MiMo、OpenRouter 等）
 - **OpenAI 格式**：自动通过 LiteLLM 转换（DeepSeek、Moonshot、通义千问等）
 
-## 快速开始
+## 快速开始（小白模式）
 
-1. 下载 `claude-proxy.ps1`
-2. 编辑脚本，在 `$PROVIDERS` 里填入你的 API key
-3. 运行：
+1. 下载这个目录里的 **三个文件**（`setup.bat`、`claude-proxy.ps1`、`README.md`），放在同一个文件夹
+2. **双击 `setup.bat`**
 
-```powershell
-.\claude-proxy.ps1
-```
+就这样。首次运行时脚本会自动：
+
+- 放开 PowerShell 执行策略（仅当前用户）
+- 检测 Node.js / Claude Code CLI / Git，缺什么用 winget 装什么
+- 弹出提示让你粘贴 API key，保存到同目录 `.env`（下次不再问）
+- 用 OpenAI 协议的 provider（DeepSeek/Kimi/通义等）时还会自动装 Python + LiteLLM
+
+装完后 `.env` 里就是你的 key，下次双击 `setup.bat` 直接进 Claude Code。
+
+> 老用户/想用命令行也可以直接跑 `.\claude-proxy.ps1`。已经装好全套环境的话可以加 `-SkipChecks` 跳过检测。
 
 ## 用法
 
@@ -101,7 +107,9 @@ Claude Code → Anthropic 协议 → LiteLLM (本地) → OpenAI 协议 → 目�
 
 - 环境变量是进程级别的，不会影响你全局的 `claude` 命令
 - 默认每个 provider 使用独立配置目录（`~/.claude-<provider>`）
-- OpenAI 格式的 provider 需要 Python + pip（LiteLLM 依赖）
+- OpenAI 格式的 provider 需要 Python + pip（LiteLLM 依赖，脚本会自动装）
 - LiteLLM 日志位于 `%TEMP%\litellm-*.log`，出错时可查看
-- 需要 PowerShell 执行权限，如遇报错运行：`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
 - 启动后输入 `/model` 可验证代理是否生效
+- API key 存在脚本同目录的 `.env` 里，**不要提交到 git**（建议加到 `.gitignore`）
+- winget 安装新软件后，**第一次需要新开一个 PowerShell 窗口**才能让 PATH 生效，脚本会自动提示
+- 如果你已经把全套环境（Node/Claude/Git/Python）装好了，可以加 `-SkipChecks` 加速启动

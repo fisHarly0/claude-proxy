@@ -31,7 +31,8 @@ param(
     [switch]$SharedConfig,    # 加此开关则使用 ~/.claude 共享配置，否则每个 provider 隔离
     [switch]$List,            # 列出所有已注册 provider
     [string]$WorkDir,         # 启动后的工作目录
-    [int]$LiteLlmPort = 0    # LiteLLM 代理端口（0 = 自动选端口）
+    [int]$LiteLlmPort = 0,    # LiteLLM 代理端口（0 = 自动选端口）
+    [switch]$SkipChecks       # 跳过前置依赖检查（Node/Claude/Git/Python）
 )
 
 
@@ -137,6 +138,188 @@ $DEFAULT_PROVIDER = "mimo"
 
 
 # =================== 辅助函数 ===================
+
+# ── 前置依赖检查（小白模式）──
+
+# 检查某个命令是否在 PATH 中可用
+function Test-Command {
+    param([string]$Name)
+    $null = Get-Command $Name -ErrorAction SilentlyContinue
+    return $?
+}
+
+# 刷新当前会话的 PATH（winget/npm install 之后新装的命令需要这一步才能被找到）
+function Refresh-Path {
+    $machine = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+    $user    = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = "$machine;$user"
+}
+
+# 通过 winget 安装一个包
+function Install-WithWinget {
+    param([string]$PackageId, [string]$DisplayName)
+
+    if (-not (Test-Command "winget")) {
+        Write-Host "  [跳过] 未检测到 winget，无法自动安装 $DisplayName" -ForegroundColor Yellow
+        Write-Host "         winget 是 Win10/11 自带的包管理器，可在 Microsoft Store 搜索 'App Installer' 安装" -ForegroundColor Gray
+        return $false
+    }
+
+    Write-Host "  [安装] 通过 winget 安装 $DisplayName ($PackageId)..." -ForegroundColor Yellow
+    winget install --id $PackageId --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [错误] $DisplayName 安装失败（winget 退出码 $LASTEXITCODE）" -ForegroundColor Red
+        return $false
+    }
+    Refresh-Path
+    Write-Host "  [完成] $DisplayName 已安装" -ForegroundColor Green
+    return $true
+}
+
+# 确保 Node.js 已安装（Claude Code 的前置）
+function Ensure-Node {
+    if (Test-Command "node") { return $true }
+    Write-Host ""
+    Write-Host "  [前置] 未检测到 Node.js（Claude Code 依赖）" -ForegroundColor Cyan
+    if (-not (Install-WithWinget "OpenJS.NodeJS.LTS" "Node.js LTS")) {
+        Write-Host "  [手动] 请从 https://nodejs.org/ 下载 LTS 版本安装后重新运行此脚本" -ForegroundColor Red
+        return $false
+    }
+    if (-not (Test-Command "node")) {
+        Write-Host "  [警告] Node.js 已安装但当前 PowerShell 会话仍找不到 'node' 命令" -ForegroundColor Yellow
+        Write-Host "         请关闭此窗口、新开一个 PowerShell 后重新运行 setup.bat / 脚本" -ForegroundColor Yellow
+        return $false
+    }
+    return $true
+}
+
+# 确保 Claude Code CLI 已安装
+function Ensure-ClaudeCode {
+    if (Test-Command "claude") { return $true }
+    Write-Host ""
+    Write-Host "  [前置] 未检测到 'claude' 命令（Claude Code CLI）" -ForegroundColor Cyan
+    if (-not (Ensure-Node)) { return $false }
+
+    Write-Host "  [安装] 通过 npm 安装 Claude Code..." -ForegroundColor Yellow
+    Write-Host "         npm install -g @anthropic-ai/claude-code" -ForegroundColor Gray
+    npm install -g "@anthropic-ai/claude-code"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [错误] Claude Code 安装失败" -ForegroundColor Red
+        Write-Host "         可手动运行: npm install -g @anthropic-ai/claude-code" -ForegroundColor Red
+        return $false
+    }
+    Refresh-Path
+    if (-not (Test-Command "claude")) {
+        Write-Host "  [警告] Claude Code 已安装但当前会话仍找不到 'claude' 命令" -ForegroundColor Yellow
+        Write-Host "         请关闭此窗口、新开 PowerShell 后重新运行" -ForegroundColor Yellow
+        return $false
+    }
+    Write-Host "  [完成] Claude Code 已安装" -ForegroundColor Green
+    return $true
+}
+
+# 确保 Git 已安装（非阻塞——Claude Code 处理代码时会用到，但本脚本本身不强依赖）
+function Ensure-Git {
+    if (Test-Command "git") { return $true }
+    Write-Host ""
+    Write-Host "  [前置] 未检测到 Git（推荐安装，Claude Code 处理项目代码时会用到）" -ForegroundColor Cyan
+    Install-WithWinget "Git.Git" "Git" | Out-Null
+    return $true   # 不阻塞启动
+}
+
+# 确保 Python 已安装（仅 OpenAI 协议的 provider 需要，给 LiteLLM 用）
+function Ensure-Python {
+    if (Test-Python) { return $true }
+    Write-Host ""
+    Write-Host "  [前置] 未检测到 Python（LiteLLM 依赖）" -ForegroundColor Cyan
+    if (-not (Install-WithWinget "Python.Python.3.12" "Python 3.12")) {
+        Write-Host "  [手动] 请从 https://www.python.org/downloads/ 下载安装后重新运行" -ForegroundColor Red
+        return $false
+    }
+    if (-not (Test-Python)) {
+        Write-Host "  [警告] Python 已安装但当前会话仍找不到 'python' 命令" -ForegroundColor Yellow
+        Write-Host "         请关闭此窗口、新开 PowerShell 后重新运行" -ForegroundColor Yellow
+        return $false
+    }
+    return $true
+}
+
+# ── .env 文件读写（保存 API key，下次免输入）──
+
+function Get-DotEnvPath {
+    if ($PSScriptRoot) { return (Join-Path $PSScriptRoot ".env") }
+    return (Join-Path (Get-Location) ".env")
+}
+
+function Load-DotEnv {
+    $envFile = Get-DotEnvPath
+    $result = @{}
+    if (-not (Test-Path $envFile)) { return $result }
+    foreach ($line in Get-Content $envFile) {
+        # 跳过空行和注释
+        if ($line -match '^\s*(#|$)') { continue }
+        if ($line -match '^\s*([^=]+?)\s*=\s*(.*?)\s*$') {
+            $name  = $matches[1].Trim() -replace '^﻿', ''
+            $value = $matches[2]
+            if ($value -match '^"(.*)"$' -or $value -match "^'(.*)'$") {
+                $value = $matches[1]
+            }
+            $result[$name] = $value
+        }
+    }
+    return $result
+}
+
+function Save-DotEnv {
+    param([string]$Key, [string]$Value)
+    $envFile = Get-DotEnvPath
+    $existing = Load-DotEnv
+    $existing[$Key] = $Value
+    $lines = @("# claude-proxy 本地配置（含 API key，不要提交到 git）")
+    foreach ($k in ($existing.Keys | Sort-Object)) {
+        $lines += "$k=$($existing[$k])"
+    }
+    # 用无 BOM 的 UTF-8 写出
+    [System.IO.File]::WriteAllLines($envFile, $lines, [System.Text.UTF8Encoding]::new($false))
+}
+
+# 解析某个 provider 的真实 API key：
+#   1) 脚本里已经填好（非占位符） → 直接用
+#   2) .env 或系统环境变量里有 <PROVIDER>_API_KEY → 用
+#   3) 都没有 → 交互式提示用户粘贴，存到 .env
+function Resolve-ApiKey {
+    param([string]$ProviderName, [string]$CurrentValue)
+
+    if ($CurrentValue -and $CurrentValue -notmatch '^PASTE_YOUR_.*_HERE$') {
+        return $CurrentValue
+    }
+
+    $envVar = "$($ProviderName.ToUpper())_API_KEY"
+
+    $dotenv = Load-DotEnv
+    if ($dotenv.ContainsKey($envVar) -and -not [string]::IsNullOrWhiteSpace($dotenv[$envVar])) {
+        return $dotenv[$envVar]
+    }
+
+    $sysVal = [System.Environment]::GetEnvironmentVariable($envVar)
+    if (-not [string]::IsNullOrWhiteSpace($sysVal)) {
+        return $sysVal
+    }
+
+    Write-Host ""
+    Write-Host "  ════ 首次配置：需要 $ProviderName 的 API key ════" -ForegroundColor Cyan
+    Write-Host "  请粘贴你的 $ProviderName API key 后回车（输入会显示但保存在本机）：" -ForegroundColor Yellow
+    $key = Read-Host
+    if ([string]::IsNullOrWhiteSpace($key)) {
+        return $null
+    }
+    $key = $key.Trim()
+    Save-DotEnv -Key $envVar -Value $key
+    Write-Host "  [完成] 已保存到 $(Get-DotEnvPath)（下次不会再问）" -ForegroundColor Green
+    Write-Host ""
+    return $key
+}
+
 
 # 列出所有已注册的 provider
 function Show-Providers {
@@ -339,6 +522,17 @@ try {
     $OutputEncoding = [System.Text.Encoding]::UTF8
 } catch {}
 
+# ── 前置依赖检查（小白模式，加 -SkipChecks 可跳过）──
+
+if (-not $SkipChecks) {
+    if (-not (Ensure-ClaudeCode)) {
+        Write-Host ""
+        Write-Host "  无法继续：Claude Code CLI 不可用" -ForegroundColor Red
+        exit 1
+    }
+    Ensure-Git | Out-Null   # 非阻塞
+}
+
 # ── 解析 provider 配置 ──
 
 $cfg = $null
@@ -401,14 +595,20 @@ if ($Model -and -not $isCustom) {
     }
 }
 
-# ── 校验 API key ──
+# ── 解析 API key ──
+# 顺序：脚本里已填好 → .env → 环境变量 → 交互式输入（保存到 .env）
+# 自定义 provider 必须通过 -ApiKey 显式传入，前面已经校验过。
 
-if ([string]::IsNullOrWhiteSpace($cfg.apiKey) -or $cfg.apiKey -eq "PASTE_YOUR_KEY_HERE") {
-    Write-Host ""
-    Write-Host "  [错误] Provider '$Provider' 的 API key 未设置" -ForegroundColor Red
-    Write-Host "         请编辑此脚本，填入 '$Provider' 的 apiKey" -ForegroundColor Red
-    Write-Host ""
-    exit 1
+if (-not $isCustom) {
+    $resolvedKey = Resolve-ApiKey -ProviderName $Provider -CurrentValue $cfg.apiKey
+    if ([string]::IsNullOrWhiteSpace($resolvedKey)) {
+        Write-Host ""
+        Write-Host "  [错误] Provider '$Provider' 的 API key 未设置" -ForegroundColor Red
+        Write-Host "         可重新运行脚本并在提示时粘贴 key，或编辑同目录 .env / 脚本内 apiKey" -ForegroundColor Red
+        Write-Host ""
+        exit 1
+    }
+    $cfg.apiKey = $resolvedKey
 }
 
 # ── 如果是 OpenAI 协议，启动 LiteLLM 转换 ──
@@ -421,13 +621,17 @@ if ($providerProtocol -eq "openai") {
     Write-Host ""
     Write-Host "  [信息] '$Provider' 使用 OpenAI 协议，需要 LiteLLM 做转换" -ForegroundColor Cyan
 
-    # 检查 Python
-    if (-not (Test-Python)) {
+    # 检查 / 安装 Python（LiteLLM 依赖）
+    if (-not $SkipChecks) {
+        if (-not (Ensure-Python)) {
+            Write-Host ""
+            Write-Host "  无法继续：Python 不可用，OpenAI 协议 provider 需要 Python 跑 LiteLLM" -ForegroundColor Red
+            exit 1
+        }
+    } elseif (-not (Test-Python)) {
         Write-Host ""
-        Write-Host "  [错误] 未检测到 Python" -ForegroundColor Red
-        Write-Host "         LiteLLM 需要 Python，请先安装：" -ForegroundColor Red
-        Write-Host "         https://www.python.org/downloads/" -ForegroundColor Red
-        Write-Host ""
+        Write-Host "  [错误] 未检测到 Python（已 -SkipChecks，不自动安装）" -ForegroundColor Red
+        Write-Host "         请安装 Python: https://www.python.org/downloads/" -ForegroundColor Red
         exit 1
     }
 
