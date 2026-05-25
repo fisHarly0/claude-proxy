@@ -131,6 +131,19 @@ $PROVIDERS = @{
     #     label     = "本地 OpenAI 兼容 (Ollama 等)"
     #     protocol  = "openai"
     # }
+
+    # ══════════════════════════════════════════════
+    #  自定义第三方（取消注释后填入你的信息）
+    # ══════════════════════════════════════════════
+
+    # "my-provider" = @{
+    #     baseUrl   = "https://your-api-endpoint.com/v1"   # ← 填你的 API 地址
+    #     apiKey    = "PASTE_YOUR_MY-PROVIDER_KEY_HERE"     # ← 填 key 或留占位符，首次运行会提示
+    #     model     = "your-model-name"                     # ← 填模型名
+    #     smallFast = "your-model-name"                     # ← 小型快速模型（可与上面相同）
+    #     label     = "我的 Provider"                        # ← 显示名称，随便写
+    #     protocol  = "anthropic"                           # ← anthropic 或 openai
+    # }
 }
 
 # 不传 -Provider 时使用哪个
