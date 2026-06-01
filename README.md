@@ -22,6 +22,8 @@
 
 > 老用户/想用命令行也可以直接跑 `.\claude-proxy.ps1`。已经装好全套环境的话可以加 `-SkipChecks` 跳过检测。
 
+脚本会**每 12 小时自动检查更新**：发现新版就从镜像下载、校验后替换 `claude-proxy.ps1` 自己，再用新版本重启——你不用做任何事。你的 `.env`（API key）和 `providers.local.ps1`（自定义 provider）都不会被动。想立即更新加 `-Update`，想跳过加 `-SkipUpdate`。
+
 ## 自动环境检测
 
 脚本启动时会自动检测以下依赖，**缺什么装什么，装过的直接跳过**：
@@ -66,18 +68,24 @@
 
 ## 添加自己的 Provider
 
-脚本底部有一个现成的模板，取消注释后填入你的信息即可：
+把 `providers.local.example.ps1` **复制一份改名为 `providers.local.ps1`**，在里面的 `$LocalProviders` 哈希表填入你的 provider 即可：
 
 ```powershell
-"my-provider" = @{
-    baseUrl   = "https://your-api-endpoint.com/v1"   # 填你的 API 地址
-    apiKey    = "PASTE_YOUR_MY-PROVIDER_KEY_HERE"     # 填 key 或留占位符，首次运行会提示
-    model     = "your-model-name"                     # 填模型名
-    smallFast = "your-model-name"                     # 小型快速模型（可与上面相同）
-    label     = "我的 Provider"                        # 显示名称，随便写
-    protocol  = "anthropic"                           # anthropic 或 openai
+$LocalProviders = @{
+    "my-provider" = @{
+        baseUrl   = "https://your-api-endpoint.com/v1"   # 填你的 API 地址
+        apiKey    = "PASTE_YOUR_MY-PROVIDER_KEY_HERE"     # 填 key 或留占位符，首次运行会提示
+        model     = "your-model-name"                     # 填模型名
+        smallFast = "your-model-name"                     # 小型快速模型（可与上面相同）
+        label     = "我的 Provider"                        # 显示名称，随便写
+        protocol  = "anthropic"                           # anthropic 或 openai
+    }
 }
+# 可选：覆盖默认 provider
+# $LocalDefaultProvider = "my-provider"
 ```
+
+> **为什么放在单独文件？** 自动更新会整体覆盖 `claude-proxy.ps1`，但**永远不会动 `providers.local.ps1`**。所以你加的 provider 在每次更新后都还在，不会被冲掉。`providers.local.ps1` 也在 `.gitignore` 里，不会误传到 git。
 
 **protocol 怎么选？**
 - 你的 API 端点兼容 Anthropic 格式 → `"anthropic"`（直连，无需额外依赖）
@@ -109,6 +117,7 @@ Claude Code → Anthropic 协议 → LiteLLM (本地) → OpenAI 协议 → 目�
 | Provider | 协议 | 说明 |
 |----------|------|------|
 | MiMo | Anthropic | 小米 MiMo，国内直连 |
+| Gemini | OpenAI | Google Gemini 2.5 Pro/Flash |
 | DeepSeek | OpenAI | DeepSeek V3/R1 |
 | Moonshot | OpenAI | 月之暗面 Kimi |
 | 智谱 GLM | OpenAI | 智谱 AI |
@@ -118,6 +127,32 @@ Claude Code → Anthropic 协议 → LiteLLM (本地) → OpenAI 协议 → 目�
 | 本地 OpenAI | OpenAI | Ollama 等本地模型 |
 
 > 预置 provider 默认注释掉了（MiMo 除外），取消注释 + 填 key 即可启用。
+
+## 自动更新
+
+- 每次启动**最多每 12 小时**联网检查一次（节流，避免每次双击都联网）；`-Update` 忽略节流强制检查，`-SkipUpdate` 跳过。
+- 更新源按可达性**多镜像顺序尝试**，全部连不上就静默用本地版本，**绝不卡住启动**：
+  1. jsdelivr CDN（国内快）
+  2. gh-proxy.com 镜像
+  3. kkgithub 镜像
+  4. GitHub 官方 raw（兜底）
+- 下载后会校验（非空 + 含版本标记 + 语法可解析）才替换，旧版备份为 `claude-proxy.ps1.bak`，失败自动回退。
+- 更新**只替换 `claude-proxy.ps1` 自己**。`.env`、`providers.local.ps1`、`setup.bat` 都不动。
+- jsdelivr 有 CDN 缓存，刚 push 的新版可能要等几小时到一天才被它认出来；急的话见下方维护者说明。
+
+### 维护者：怎么发布新版
+
+1. 改完代码，把 `claude-proxy.ps1` 顶部的 `$SCRIPT_VERSION` 和根目录 `VERSION` 文件**同时**改成新版本号（如 `1.2.0`）。
+2. commit + push 到 `master`。
+3. 用户下次启动（或 `-Update`）就会自动升级。
+4. 想让 jsdelivr 立刻刷新缓存，访问一次：
+   `https://purge.jsdelivr.net/gh/fisHarly0/claude-proxy@master/claude-proxy.ps1`
+   和 `.../VERSION`。
+
+> **编码铁律（否则用户双击直接崩）**：
+> - `claude-proxy.ps1`、`providers.local.ps1` 含中文，**必须存成 UTF-8 with BOM**。Windows PowerShell 5.1 用 `-File` 加载无 BOM 的中文脚本会按 GBK 解码、乱码、解析失败。
+> - `setup.bat` **必须是 CRLF 换行、不要 BOM**。LF 换行会让 cmd 把命令拆错，BOM 会让 `@echo off` 前出现乱码字符。
+> - 很多编辑器（尤其记事本）保存时会偷偷去掉 BOM 或改成 LF，改完务必检查。
 
 ## 注意事项
 
