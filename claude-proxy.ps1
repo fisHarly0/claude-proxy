@@ -376,7 +376,14 @@ function Fetch-FromMirrors {
         try {
             $resp = Invoke-WebRequest -Uri $url -TimeoutSec $TimeoutSec -UseBasicParsing -ErrorAction Stop
             if ($resp.StatusCode -eq 200 -and $resp.Content) {
-                return @{ Content = $resp.Content; Url = $url }
+                # 有的镜像（如 jsdelivr）会把内容当二进制返回 byte[]，统一解码成 UTF-8 字符串，
+                # 否则后面 [version] 解析会拿到 "49 46 49..." 这种字节串而失败。
+                $text = if ($resp.Content -is [byte[]]) {
+                    [System.Text.Encoding]::UTF8.GetString($resp.Content)
+                } else {
+                    [string]$resp.Content
+                }
+                return @{ Content = $text; Url = $url }
             }
         } catch { continue }
     }
