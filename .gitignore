@@ -10,3 +10,10 @@
 
 # LiteLLM 日志（正常应该落在 %TEMP%，这里兜底）
 litellm-*.log
+
+# 用户自定义 provider（含可能的 key），不入库；example 模板才入库
+providers.local.ps1
+
+# 自动更新留下的本地文件
+.update-check
+*.ps1.bak

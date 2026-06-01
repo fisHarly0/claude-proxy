@@ -1,0 +1,7 @@
+# 锁住这些脚本的原始字节，禁止 git 的换行符自动转换（autocrlf）。
+# 原因：jsdelivr / raw 分发的是 git blob 的原始字节，自动更新也按字节下载。
+#   - setup.bat 必须保持 CRLF（cmd 解析批处理要求；LF 会让命令被拆错）
+#   - claude-proxy.ps1 / providers.local.ps1 含中文，靠 UTF-8 BOM 让 PS5.1 正确解码
+# 一旦被规范化成 LF，用户下载后会直接乱码 / 解析失败。
+*.bat   -text
+*.ps1   -text

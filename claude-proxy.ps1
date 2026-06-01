@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #  claude-proxy.ps1
 #  把 Claude Code 路由到任意 AI 提供商（Anthropic / OpenAI 格式均支持）
 #
@@ -32,8 +32,25 @@ param(
     [switch]$List,            # 列出所有已注册 provider
     [string]$WorkDir,         # 启动后的工作目录
     [int]$LiteLlmPort = 0,    # LiteLLM 代理端口（0 = 自动选端口）
-    [switch]$SkipChecks       # 跳过前置依赖检查（Node/Claude/Git/Python）
+    [switch]$SkipChecks,      # 跳过前置依赖检查（Node/Claude/Git/Python）
+    [switch]$Update,          # 强制立即检查并应用更新（忽略 12 小时节流）
+    [switch]$SkipUpdate,      # 跳过本次自动更新检查
+    [int]$RelaunchCount = 0   # 【内部参数】自动重开会话的次数计数器，防死循环，用户无需手动传
 )
+
+
+# 顶层捕获脚本真实的绑定参数与剩余参数。
+# 注意：在【函数内部】读 $PSBoundParameters / $args 拿到的是那个函数自己的参数，
+# 不是主脚本的。所以重启自身时必须用这里捕获的脚本级副本来重建命令行。
+$ScriptBoundParameters = $PSBoundParameters
+$ScriptExtraArgs       = $args
+
+
+# =================== 自动更新配置 ===================
+# 版本号：发布新版时手动 +1，同时更新仓库根目录的 VERSION 文件。
+$SCRIPT_VERSION = "1.1.0"
+$UPDATE_REPO    = "fisHarly0/claude-proxy"   # GitHub owner/repo
+$UPDATE_BRANCH  = "master"
 
 
 # =================== PROVIDER 注册表 ===================
@@ -77,6 +94,15 @@ $PROVIDERS = @{
     #  OpenAI 格式（自动通过 LiteLLM 转换）
     #  首次使用会自动安装 LiteLLM（pip install litellm）
     # ══════════════════════════════════════════════
+
+    # "gemini" = @{
+    #     baseUrl   = "https://generativelanguage.googleapis.com/v1beta/openai"
+    #     apiKey    = "PASTE_YOUR_GEMINI_KEY_HERE"
+    #     model     = "gemini-2.5-pro"
+    #     smallFast = "gemini-2.5-flash"
+    #     label     = "Google Gemini"
+    #     protocol  = "openai"
+    # }
 
     # "deepseek" = @{
     #     baseUrl   = "https://api.deepseek.com/v1"
@@ -149,6 +175,23 @@ $PROVIDERS = @{
 # 不传 -Provider 时使用哪个
 $DEFAULT_PROVIDER = "mimo"
 
+# ── 外置自定义 provider（providers.local.ps1）──
+# 在脚本同目录放一个 providers.local.ps1，里面定义 $LocalProviders 哈希表即可。
+# 这些 provider 会自动合并进 $PROVIDERS，且【自动更新覆盖主脚本时不会动这个文件】。
+# 可选 $LocalDefaultProvider 覆盖默认 provider。模板见 providers.local.example.ps1。
+$localProviderFile = if ($PSScriptRoot) { Join-Path $PSScriptRoot "providers.local.ps1" } else { Join-Path (Get-Location) "providers.local.ps1" }
+if (Test-Path $localProviderFile) {
+    try {
+        . $localProviderFile
+        if ($LocalProviders -is [hashtable]) {
+            foreach ($k in $LocalProviders.Keys) { $PROVIDERS[$k] = $LocalProviders[$k] }
+        }
+        if ($LocalDefaultProvider) { $DEFAULT_PROVIDER = $LocalDefaultProvider }
+    } catch {
+        Write-Host "  [警告] 加载 providers.local.ps1 失败：$($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
 
 # =================== 辅助函数 ===================
 
@@ -166,6 +209,55 @@ function Refresh-Path {
     $machine = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
     $user    = [System.Environment]::GetEnvironmentVariable("Path", "User")
     $env:Path = "$machine;$user"
+}
+
+# 根据脚本本次的真实参数，重建一份命令行参数数组（用于重启自身）。
+# $Exclude 里的参数会被剔除（之后由调用方按需重新追加）。
+function Build-RelaunchArgs {
+    param([string[]]$Exclude = @())
+    $a = @()
+    foreach ($kv in $ScriptBoundParameters.GetEnumerator()) {
+        if ($Exclude -contains $kv.Key) { continue }
+        if ($kv.Value -is [System.Management.Automation.SwitchParameter]) {
+            if ($kv.Value.IsPresent) { $a += "-$($kv.Key)" }
+        } else {
+            $a += "-$($kv.Key)"
+            $a += "$($kv.Value)"
+        }
+    }
+    if ($ScriptExtraArgs) { $a += $ScriptExtraArgs }
+    return ,$a   # 用逗号包一层，确保始终返回数组（哪怕只有一个元素）
+}
+
+# 自动新开一个 PowerShell 会话重跑脚本，让刚装好的 winget/npm 程序进 PATH。
+# 原理：winget/npm 把路径写进注册表的 Machine/User PATH，但当前进程的 PATH 是启动时的快照，
+# Refresh-Path 重读注册表对多数情况够用；少数情况（尤其 winget 装 Node）必须全新进程才能拿到。
+# 全新 powershell.exe 启动时会重新读注册表 PATH，所以能看到新程序——这就是这里要做的事。
+# 用 $RelaunchCount 上限防死循环（最多重开 3 次，足够覆盖 Node 一次 + claude 一次的最坏情况）。
+function Invoke-Relaunch {
+    param([string]$Reason)
+
+    if ($RelaunchCount -ge 3) { return $false }   # 重开够多次仍不行，交回手动提示
+    $scriptPath = $PSCommandPath
+    if (-not $scriptPath) { return $false }
+
+    Write-Host ""
+    Write-Host "  [环境] $Reason" -ForegroundColor Cyan
+    Write-Host "  [环境] 自动新开一个会话让 PATH 生效并继续（无需手动操作）..." -ForegroundColor Cyan
+    Write-Host ""
+
+    try {
+        # 重开后不再重复检查更新（节流通常已挡住，这里再保险一层），并递增重开计数
+        $relaunch = Build-RelaunchArgs -Exclude @('RelaunchCount', 'SkipUpdate')
+        $relaunch += "-RelaunchCount"
+        $relaunch += ([string]($RelaunchCount + 1))
+        $relaunch += "-SkipUpdate"
+        Start-Sleep -Seconds 1
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $scriptPath @relaunch
+        exit $LASTEXITCODE
+    } catch {
+        return $false   # 启动新进程失败，交回手动提示
+    }
 }
 
 # 通过 winget 安装一个包
@@ -199,6 +291,9 @@ function Ensure-Node {
         return $false
     }
     if (-not (Test-Command "node")) {
+        # 先尝试自动新开会话（Invoke-Relaunch 成功会直接 exit，不会返回到这里）
+        Invoke-Relaunch -Reason "Node.js 已安装，需要一个新会话让 PATH 生效" | Out-Null
+        # 走到这说明已重开过多次仍不行，退回手动提示
         Write-Host "  [警告] Node.js 已安装但当前 PowerShell 会话仍找不到 'node' 命令" -ForegroundColor Yellow
         Write-Host "         请关闭此窗口、新开一个 PowerShell 后重新运行 setup.bat / 脚本" -ForegroundColor Yellow
         return $false
@@ -223,6 +318,7 @@ function Ensure-ClaudeCode {
     }
     Refresh-Path
     if (-not (Test-Command "claude")) {
+        Invoke-Relaunch -Reason "Claude Code 已安装，需要一个新会话让 PATH 生效" | Out-Null
         Write-Host "  [警告] Claude Code 已安装但当前会话仍找不到 'claude' 命令" -ForegroundColor Yellow
         Write-Host "         请关闭此窗口、新开 PowerShell 后重新运行" -ForegroundColor Yellow
         return $false
@@ -250,11 +346,133 @@ function Ensure-Python {
         return $false
     }
     if (-not (Test-Python)) {
+        Invoke-Relaunch -Reason "Python 已安装，需要一个新会话让 PATH 生效" | Out-Null
         Write-Host "  [警告] Python 已安装但当前会话仍找不到 'python' 命令" -ForegroundColor Yellow
         Write-Host "         请关闭此窗口、新开 PowerShell 后重新运行" -ForegroundColor Yellow
         return $false
     }
     return $true
+}
+
+# ── 自动更新（多镜像顺序尝试，连不上则静默跳过）──
+
+# 国内直连 raw.githubusercontent.com 常失败，按可达性顺序尝试多个镜像。
+function Get-UpdateMirrors {
+    param([string]$File)
+    $repo = $UPDATE_REPO
+    $br   = $UPDATE_BRANCH
+    return @(
+        "https://cdn.jsdelivr.net/gh/$repo@$br/$File",                              # jsdelivr CDN（国内快，但有缓存延迟）
+        "https://gh-proxy.com/https://raw.githubusercontent.com/$repo/$br/$File",   # ghproxy 镜像
+        "https://raw.kkgithub.com/$repo/$br/$File",                                 # kkgithub 镜像
+        "https://raw.githubusercontent.com/$repo/$br/$File"                         # GitHub 官方（兜底）
+    )
+}
+
+# 依次尝试各镜像下载某个文件，第一个成功就返回 @{ Content; Url }，全失败返回 $null。
+function Fetch-FromMirrors {
+    param([string]$File, [int]$TimeoutSec = 6)
+    foreach ($url in (Get-UpdateMirrors -File $File)) {
+        try {
+            $resp = Invoke-WebRequest -Uri $url -TimeoutSec $TimeoutSec -UseBasicParsing -ErrorAction Stop
+            if ($resp.StatusCode -eq 200 -and $resp.Content) {
+                return @{ Content = $resp.Content; Url = $url }
+            }
+        } catch { continue }
+    }
+    return $null
+}
+
+# 自更新主流程：拉远端 VERSION 比对，更新则下载校验后替换并用新版重启。
+# 任何环节失败都静默降级为"继续用当前版本"，绝不阻塞启动。
+function Invoke-SelfUpdate {
+    param([switch]$Force)
+
+    $scriptPath = $PSCommandPath
+    if (-not $scriptPath) { return }
+    $dir    = Split-Path -Parent $scriptPath
+    $marker = Join-Path $dir ".update-check"
+
+    # 节流：每 12 小时最多联网检查一次（-Update / -Force 忽略节流）
+    if (-not $Force -and (Test-Path $marker)) {
+        try {
+            $lastTime = [datetime]::Parse((Get-Content $marker -Raw -ErrorAction Stop).Trim())
+            if (((Get-Date) - $lastTime).TotalHours -lt 12) { return }
+        } catch {}
+    }
+
+    # 拉远端版本号
+    $verRes = Fetch-FromMirrors -File "VERSION" -TimeoutSec 5
+    # 无论成败都记录检查时间，避免每次双击都联网
+    try { (Get-Date).ToString("o") | Set-Content -Path $marker -Encoding ascii -ErrorAction SilentlyContinue } catch {}
+    if (-not $verRes) { return }   # 全部镜像连不上，静默用本地版
+
+    $remoteVer = ($verRes.Content -replace '[^\d\.]', '').Trim()
+    if (-not $remoteVer) { return }
+    try {
+        $rv = [version]$remoteVer
+        $lv = [version]$SCRIPT_VERSION
+    } catch { return }
+    if ($rv -le $lv) { return }   # 已是最新
+
+    Write-Host ""
+    Write-Host "  [更新] 发现新版本 v$remoteVer（当前 v$SCRIPT_VERSION），正在下载..." -ForegroundColor Cyan
+
+    # 字节级下载到临时文件：不经过 IWR 的文本解码（避免中文乱码），并原样保留 UTF-8 BOM。
+    # PS5.1 用 -File 加载含中文的 .ps1 必须有 BOM，否则按 GBK 解码会乱码崩溃，所以这里绝不能丢 BOM。
+    $tmpNew = "$scriptPath.new"
+    Remove-Item $tmpNew -ErrorAction SilentlyContinue
+    $okDl = $false
+    foreach ($url in (Get-UpdateMirrors -File "claude-proxy.ps1")) {
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $tmpNew -TimeoutSec 20 -UseBasicParsing -ErrorAction Stop
+            if ((Test-Path $tmpNew) -and (Get-Item $tmpNew).Length -gt 0) { $okDl = $true; break }
+        } catch { Remove-Item $tmpNew -ErrorAction SilentlyContinue; continue }
+    }
+    if (-not $okDl) {
+        Write-Host "  [更新] 下载失败，继续使用当前版本" -ForegroundColor Yellow
+        return
+    }
+
+    # 校验：.NET 按 BOM/UTF-8 正确读取，检查内容完整（含版本标记）+ 语法可解析，
+    # 防止下到半截 / 错误页面 / 被劫持的内容写坏脚本。
+    $newContent = [System.IO.File]::ReadAllText($tmpNew)
+    if ([string]::IsNullOrWhiteSpace($newContent) -or $newContent -notmatch '\$SCRIPT_VERSION') {
+        Write-Host "  [更新] 下载内容校验失败，已跳过" -ForegroundColor Yellow
+        Remove-Item $tmpNew -ErrorAction SilentlyContinue
+        return
+    }
+    $parseErr = $null
+    [void][System.Management.Automation.PSParser]::Tokenize($newContent, [ref]$parseErr)
+    if ($parseErr -and $parseErr.Count -gt 0) {
+        Write-Host "  [更新] 新版脚本语法校验未通过，已跳过" -ForegroundColor Yellow
+        Remove-Item $tmpNew -ErrorAction SilentlyContinue
+        return
+    }
+
+    # 备份旧版 + 用下载的原始字节替换自身（保留 BOM）。PowerShell 启动时已把脚本读入内存，
+    # 覆盖磁盘上的 .ps1 不影响当前进程，所以可以安全替换自身。
+    try {
+        Copy-Item $scriptPath "$scriptPath.bak" -Force -ErrorAction SilentlyContinue
+        Copy-Item $tmpNew $scriptPath -Force
+        Remove-Item $tmpNew -ErrorAction SilentlyContinue
+    } catch {
+        Write-Host "  [更新] 写入失败（可能无写权限），继续使用当前版本" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "  [更新] 已更新到 v$remoteVer，正在以新版本重启..." -ForegroundColor Green
+    Write-Host ""
+
+    # 用新版本重新执行（带 -SkipUpdate 防止死循环）；重启失败则回退继续当前会话
+    try {
+        $relaunch = Build-RelaunchArgs -Exclude @('SkipUpdate', 'Update')
+        $relaunch += "-SkipUpdate"
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $scriptPath @relaunch
+        exit $LASTEXITCODE
+    } catch {
+        Write-Host "  [更新] 自动重启失败，本次仍用当前版本运行（下次启动即新版）" -ForegroundColor Yellow
+    }
 }
 
 # ── .env 文件读写（保存 API key，下次免输入）──
@@ -364,6 +582,8 @@ function Show-Usage {
     Write-Host '   .\claude-proxy.ps1 -Provider mimo -Model mimo-v2-flash  # 覆盖模型' -ForegroundColor Gray
     Write-Host '   .\claude-proxy.ps1 -SharedConfig                 # 用 ~/.claude 共享配置' -ForegroundColor Gray
     Write-Host '   .\claude-proxy.ps1 -WorkDir "C:\my\project"     # 指定工作目录' -ForegroundColor Gray
+    Write-Host '   .\claude-proxy.ps1 -Update                      # 强制立即检查并更新脚本' -ForegroundColor Gray
+    Write-Host '   .\claude-proxy.ps1 -SkipUpdate                  # 跳过本次自动更新检查' -ForegroundColor Gray
     Write-Host ""
 }
 
@@ -534,6 +754,13 @@ try {
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     $OutputEncoding = [System.Text.Encoding]::UTF8
 } catch {}
+
+# ── 自动更新（多镜像，连不上则静默跳过；-Update 强制，-SkipUpdate 跳过）──
+if ($Update) {
+    Invoke-SelfUpdate -Force
+} elseif (-not $SkipUpdate) {
+    Invoke-SelfUpdate
+}
 
 # ── 前置依赖检查（小白模式，加 -SkipChecks 可跳过）──
 
@@ -710,6 +937,7 @@ $providerDisplay = if ($isCustom) { "自定义 ($($cfg.baseUrl))" } else { "$Pro
 $protocolDisplay = if ($providerProtocol -eq "openai") { "OpenAI → LiteLLM → Anthropic" } else { "Anthropic (直连)" }
 Write-Host ""
 Write-Host "  ════════ Claude Code 代理 ════════" -ForegroundColor Cyan
+Write-Host "   版本     : v$SCRIPT_VERSION"          -ForegroundColor Green
 Write-Host "   Provider : $providerDisplay"         -ForegroundColor Green
 Write-Host "   模型     : $($cfg.model)"             -ForegroundColor Green
 Write-Host "   协议     : $protocolDisplay"          -ForegroundColor Green
@@ -746,7 +974,12 @@ try {
 #
 #  * 验证代理是否生效：启动后输入 /model 查看
 #
-#  * 添加新 provider：编辑上面的 $PROVIDERS 哈希表
+#  * 添加新 provider：复制 providers.local.example.ps1 为 providers.local.ps1
+#    并填入你的 provider。自动更新不会覆盖这个文件。
+#
+#  * 更新脚本：默认每 12 小时自动检查；手动立即更新加 -Update；
+#    跳过加 -SkipUpdate。更新只替换 claude-proxy.ps1 本身，
+#    你的 .env 和 providers.local.ps1 都不会被动。
 #
 #  * OpenAI 格式的 provider 会自动通过 LiteLLM 转换，
 #    首次使用会自动安装（需要 Python + pip）
