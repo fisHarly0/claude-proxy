@@ -19,6 +19,10 @@ setlocal
 echo.
 echo  ====== Claude Proxy 启动器 ======
 echo.
+echo  首次使用需联网安装依赖（Node / Claude Code，OpenAI 类 provider 还需 Python+LiteLLM）。
+echo  整个过程可能需要 5-10 分钟，期间窗口可能看起来没动静，这是正常的，请勿关闭窗口。
+echo  （默认的 DeepSeek 走直连，无需 Python/LiteLLM，会快很多。）
+echo.
 
 REM 切到 .bat 所在目录，保证能找到 claude-proxy.ps1 和 .env
 cd /d "%~dp0"
@@ -28,7 +32,14 @@ powershell -NoProfile -Command "if ((Get-ExecutionPolicy -Scope CurrentUser) -no
 
 REM 启动主脚本，参数透传
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0claude-proxy.ps1" %*
+set "PROXY_EXIT=%errorlevel%"
 
 echo.
+if not "%PROXY_EXIT%"=="0" (
+  echo  [提示] 启动似乎未正常完成（退出码 %PROXY_EXIT%）。
+  echo         若提示"禁止运行脚本/无法加载脚本"，多半是被组策略限制，
+  echo         请在 PowerShell 运行: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned 后重试。
+  echo.
+)
 echo  ====== Claude 已退出 ======
 pause

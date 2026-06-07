@@ -5,3 +5,6 @@
 # 一旦被规范化成 LF，用户下载后会直接乱码 / 解析失败。
 *.bat   -text
 *.ps1   -text
+
+# VERSION 是纯版本号，禁止换行符转换（自更新按字节拉取后比对，CRLF 会混入杂字符）
+VERSION -text
