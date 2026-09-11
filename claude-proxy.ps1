@@ -13,6 +13,7 @@
 #    .\claude-proxy.ps1 -Provider custom -BaseUrl "https://..." -ApiKey "sk-..." -Model "xxx" -Protocol openai
 #    .\claude-proxy.ps1 -List                        # 列出所有可用 provider
 #    .\claude-proxy.ps1 -Help                        # 显示用法帮助
+#    .\claude-proxy.ps1 -Doctor                      # 一键体检环境（新电脑部署先跑这个）
 #    .\claude-proxy.ps1 -Provider deepseek -Model deepseek-v4-flash  # 覆盖模型
 #    .\claude-proxy.ps1 -SharedConfig                # 用 ~/.claude 共享配置
 #    .\claude-proxy.ps1 -WorkDir "C:\my\project"     # 指定工作目录
@@ -33,6 +34,7 @@ param(
     [string]$Protocol,        # 自定义/覆盖 provider 的协议：anthropic 或 openai
     [switch]$SharedConfig,    # 加此开关则使用 ~/.claude 共享配置，否则每个 provider 隔离
     [switch]$List,            # 列出所有已注册 provider
+    [switch]$Doctor,          # 一键体检环境/网络/编码，不启动 Claude
     [Alias('h')]
     [switch]$Help,            # 显示用法帮助（-h 同义）
     [string]$WorkDir,         # 启动后的工作目录
@@ -60,7 +62,7 @@ try {
 
 # =================== 自动更新配置 ===================
 # 版本号：发布新版时手动 +1，同时更新仓库根目录的 VERSION 文件。
-$SCRIPT_VERSION = "1.2.0"
+$SCRIPT_VERSION = "1.3.0"
 $UPDATE_REPO    = "fisHarly0/claude-proxy"   # GitHub owner/repo
 $UPDATE_BRANCH  = "master"
 
@@ -288,7 +290,9 @@ function Install-WithWinget {
 
     if (-not (Test-Command "winget")) {
         Write-Host "  [跳过] 未检测到 winget，无法自动安装 $DisplayName" -ForegroundColor Yellow
-        Write-Host "         winget 是 Win10/11 自带的包管理器，可在 Microsoft Store 搜索 'App Installer' 安装" -ForegroundColor Gray
+        Write-Host "         修复（任选其一）：" -ForegroundColor Gray
+        Write-Host "           1) 打开 Microsoft Store，搜索并安装 'App Installer'" -ForegroundColor Gray
+        Write-Host "           2) 直接去官网手动安装（见下方 [手动] 提示）" -ForegroundColor Gray
         return $false
     }
 
@@ -296,7 +300,9 @@ function Install-WithWinget {
     Write-Host "         首次安装可能需要 1-5 分钟，国内网络下窗口可能看起来没动静，这是正常的，请勿关闭窗口" -ForegroundColor Gray
     winget install --id $PackageId --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  [错误] $DisplayName 安装失败（winget 退出码 $LASTEXITCODE，多半是网络问题）" -ForegroundColor Red
+        Write-Host "  [错误] $DisplayName 安装失败（winget 退出码 $LASTEXITCODE）" -ForegroundColor Red
+        Write-Host "         常见原因：无管理员权限 / 公司电脑被策略限制 / 网络到 Microsoft 源不通" -ForegroundColor Gray
+        Write-Host "         修复：改用手动安装（见下方 [手动] 提示），装完重新双击 setup.bat" -ForegroundColor Gray
         return $false
     }
     Refresh-Path
@@ -310,7 +316,9 @@ function Ensure-Node {
     Write-Host ""
     Write-Host "  [前置] 未检测到 Node.js（Claude Code 依赖）" -ForegroundColor Cyan
     if (-not (Install-WithWinget "OpenJS.NodeJS.LTS" "Node.js LTS")) {
-        Write-Host "  [手动] 请从 https://nodejs.org/ 下载 LTS 版本安装后重新双击 setup.bat" -ForegroundColor Red
+        Write-Host "  [手动] 请从 https://nodejs.org/ 下载 LTS 版本安装（Windows x64 .msi）" -ForegroundColor Red
+        Write-Host "         国内可试镜像: https://npmmirror.com/mirrors/node/" -ForegroundColor Gray
+        Write-Host "         装完后重新双击 setup.bat" -ForegroundColor Gray
         return $false
     }
     if (-not (Test-Command "node")) {
@@ -324,31 +332,103 @@ function Ensure-Node {
     return $true
 }
 
+# 探测当前 npm 全局前缀下的 claude 是否可用（winget/npm 装完 PATH 常有延迟）
+function Get-NpmGlobalBin {
+    if (-not (Test-Command "npm")) { return $null }
+    try {
+        $prefix = (npm prefix -g 2>$null | Select-Object -Last 1)
+        if ($prefix) {
+            $bin = Join-Path $prefix "claude.cmd"
+            if (Test-Path $bin) { return $bin }
+            $binPs = Join-Path $prefix "claude.ps1"
+            if (Test-Path $binPs) { return $binPs }
+        }
+    } catch {}
+    return $null
+}
+
+# 通过 npm 安装 Claude Code；默认源失败时自动切国内镜像再试
+function Install-ClaudeCodeCli {
+    if (-not (Test-Command "npm")) {
+        Write-Host "  [错误] 未找到 npm，无法安装 Claude Code（请先装好 Node.js）" -ForegroundColor Red
+        return $false
+    }
+
+    $pkg = "@anthropic-ai/claude-code"
+    $attempts = @(
+        @{ Label = "默认 npm 源";       RegArgs = @() },
+        @{ Label = "国内 npmmirror 镜像"; RegArgs = @("--registry", "https://registry.npmmirror.com") }
+    )
+
+    foreach ($a in $attempts) {
+        Write-Host "  [安装] 通过 npm 安装 Claude Code（$($a.Label)）..." -ForegroundColor Yellow
+        Write-Host "         npm install -g $pkg$(@($a.RegArgs) -join ' ')" -ForegroundColor Gray
+        Write-Host "         国内网络可能较慢（1-5 分钟），请勿关闭窗口" -ForegroundColor Gray
+        $npmArgs = @("install", "-g", $pkg) + $a.RegArgs
+        & npm @npmArgs
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  [完成] Claude Code 已通过 $($a.Label) 安装" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "  [警告] $($a.Label) 安装失败（退出码 $LASTEXITCODE）" -ForegroundColor Yellow
+    }
+
+    Write-Host "  [错误] Claude Code 自动安装失败" -ForegroundColor Red
+    Write-Host "         可手动执行任一命令后再双击 setup.bat：" -ForegroundColor Yellow
+    Write-Host "           npm install -g $pkg --registry https://registry.npmmirror.com" -ForegroundColor Gray
+    Write-Host "           npm install -g $pkg" -ForegroundColor Gray
+    return $false
+}
+
+# 安装后做一次版本冒烟，避免"装了但命令不可用/半残包"
+function Test-ClaudeSmoke {
+    if (-not (Test-Command "claude")) { return $false }
+    try {
+        $ver = & claude --version 2>&1
+        if ($LASTEXITCODE -eq 0 -and $ver) {
+            Write-Host "  [冒烟] Claude Code 可用：$("$ver" | Select-Object -First 1)" -ForegroundColor Green
+            return $true
+        }
+    } catch {}
+    Write-Host "  [警告] claude 命令存在但 --version 失败，可能安装不完整" -ForegroundColor Yellow
+    return $false
+}
+
 # 确保 Claude Code CLI 已安装
 function Ensure-ClaudeCode {
-    if (Test-Command "claude") { return $true }
+    if (Test-Command "claude") {
+        return $true
+    }
     Write-Host ""
     Write-Host "  [前置] 未检测到 'claude' 命令（Claude Code CLI）" -ForegroundColor Cyan
+
+    # npm 全局目录里可能已经有，只是 PATH 还没刷新
+    $npmBin = Get-NpmGlobalBin
+    if ($npmBin -and (Test-Path $npmBin)) {
+        Write-Host "  [环境] 在 npm 全局目录发现了 claude，刷新 PATH..." -ForegroundColor Cyan
+        Refresh-Path
+        Invoke-Relaunch -Reason "找到已安装的 Claude Code，需要新会话让 PATH 生效" | Out-Null
+    }
+
     if (-not (Ensure-Node)) { return $false }
 
-    Write-Host "  [安装] 通过 npm 安装 Claude Code..." -ForegroundColor Yellow
-    Write-Host "         npm install -g @anthropic-ai/claude-code" -ForegroundColor Gray
-    Write-Host "         国内网络可能较慢，请耐心等待（约 1-3 分钟），不要关闭窗口" -ForegroundColor Gray
-    npm install -g "@anthropic-ai/claude-code"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  [错误] Claude Code 自动安装失败（多半是网络问题）" -ForegroundColor Red
-        Write-Host "         请检查网络后，关掉本窗口重新双击 setup.bat 再试一次" -ForegroundColor Yellow
-        Write-Host "         (高级用户可手动: npm install -g @anthropic-ai/claude-code)" -ForegroundColor DarkGray
+    if (-not (Install-ClaudeCodeCli)) {
         return $false
     }
     Refresh-Path
     if (-not (Test-Command "claude")) {
+        # npm prefix 兜底：有时装好了但当前会话 PATH 仍没有
+        $npmBin2 = Get-NpmGlobalBin
+        if ($npmBin2) {
+            Write-Host "  [环境] 尝试用 npm 全局路径直接调用..." -ForegroundColor Gray
+        }
         Invoke-Relaunch -Reason "Claude Code 已安装，需要一个新会话让 PATH 生效" | Out-Null
         Write-Host "  [警告] Claude Code 已安装但当前会话仍找不到 'claude' 命令" -ForegroundColor Yellow
         Write-Host "         请关闭此窗口，重新双击 setup.bat（无需自己开 PowerShell）" -ForegroundColor Yellow
+        Write-Host "         若仍失败，运行  .\claude-proxy.ps1 -Doctor  查看详细诊断" -ForegroundColor Gray
         return $false
     }
-    Write-Host "  [完成] Claude Code 已安装" -ForegroundColor Green
+    Test-ClaudeSmoke | Out-Null
     return $true
 }
 
@@ -377,6 +457,227 @@ function Ensure-Python {
         return $false
     }
     return $true
+}
+
+# ── 一键体检（-Doctor）──
+# 只读检查，不安装任何东西、不打印 API key 明文。绿=正常，黄=可继续但建议修，红=会卡住启动。
+function Invoke-Doctor {
+    # 用 script 作用域计数：嵌套函数里的 $script: 才能正确累加
+    $script:DoctorPass = 0
+    $script:DoctorWarn = 0
+    $script:DoctorFail = 0
+    function Write-Check {
+        param([string]$Status, [string]$Name, [string]$Detail, [string]$Fix = "")
+        $color = switch ($Status) {
+            "OK"   { $script:DoctorPass++; "Green" }
+            "WARN" { $script:DoctorWarn++; "Yellow" }
+            "FAIL" { $script:DoctorFail++; "Red" }
+            default { "Gray" }
+        }
+        $mark = switch ($Status) { "OK" { "[OK]  " } "WARN" { "[WARN]" } "FAIL" { "[FAIL]" } default { "[···] " } }
+        Write-Host "  $mark $Name" -ForegroundColor $color
+        if ($Detail) { Write-Host "         $Detail" -ForegroundColor Gray }
+        if ($Fix -and $Status -ne "OK") { Write-Host "         修复：$Fix" -ForegroundColor DarkYellow }
+    }
+
+    Write-Host ""
+    Write-Host "  ════════ claude-proxy 环境体检 v$SCRIPT_VERSION ════════" -ForegroundColor Cyan
+    Write-Host "  （只检查不安装；把本窗口文字原样复制即可求助，不会带出 API key）" -ForegroundColor Gray
+    Write-Host ""
+
+    # 1. Windows
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $caption = $os.Caption
+        $build = [int]$os.BuildNumber
+        if ($build -ge 19045 -or $build -ge 19041) {
+            Write-Check "OK" "Windows" "$caption (Build $build)"
+        } elseif ($build -ge 10240) {
+            Write-Check "WARN" "Windows" "$caption (Build $build)" "建议 Win10 22H2 或 Win11；过旧的精简系统可能没有 winget"
+        } else {
+            Write-Check "FAIL" "Windows" "$caption (Build $build)" "需要 Windows 10/11"
+        }
+    } catch {
+        Write-Check "WARN" "Windows" "无法读取系统信息" ""
+    }
+
+    # 2. 执行策略
+    try {
+        $policies = @()
+        foreach ($scope in @("Process","CurrentUser","LocalMachine")) {
+            $p = Get-ExecutionPolicy -Scope $scope -ErrorAction SilentlyContinue
+            if ($p -and $p -ne "Undefined") { $policies += "$scope=$p" }
+        }
+        $eff = Get-ExecutionPolicy
+        if ($eff -in @("RemoteSigned","Unrestricted","Bypass")) {
+            Write-Check "OK" "PowerShell 执行策略" "Effective=$eff ($($policies -join ', '))"
+        } else {
+            Write-Check "FAIL" "PowerShell 执行策略" "Effective=$eff" "Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
+        }
+    } catch {
+        Write-Check "WARN" "PowerShell 执行策略" "读取失败：$($_.Exception.Message)"
+    }
+
+    # 3. 本脚本编码（BOM）
+    if ($PSCommandPath -and (Test-Path $PSCommandPath)) {
+        $bytes = [System.IO.File]::ReadAllBytes($PSCommandPath)
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191) {
+            Write-Check "OK" "主脚本编码" "UTF-8 BOM 正确（中文不会乱码）"
+        } else {
+            Write-Check "FAIL" "主脚本编码" "缺少 UTF-8 BOM（前3字节: $($bytes[0]),$($bytes[1]),$($bytes[2])）" "用 VS Code 另存为 UTF-8 with BOM，或重新 Download ZIP（不要浏览器另存为单个文件）"
+        }
+    }
+
+    # 4. winget
+    if (Test-Command "winget") {
+        try {
+            $wv = (& winget --version 2>&1 | Select-Object -First 1)
+            Write-Check "OK" "winget" "$wv"
+        } catch {
+            Write-Check "WARN" "winget" "命令存在但执行异常" "Microsoft Store 安装/更新 App Installer"
+        }
+    } else {
+        Write-Check "WARN" "winget" "未检测到（自动装依赖会降级为手动）" "Microsoft Store 安装 App Installer；或自行手动装 Node/Git"
+    }
+
+    # 5. Node / npm
+    if (Test-Command "node") {
+        $nv = (& node --version 2>&1 | Select-Object -First 1)
+        Write-Check "OK" "Node.js" "$nv"
+    } else {
+        $npmBin = Get-NpmGlobalBin
+        if ($npmBin) {
+            Write-Check "WARN" "Node.js" "PATH 中没有 node，但 npm 全局目录有痕迹" "关闭窗口重新双击 setup.bat"
+        } else {
+            Write-Check "FAIL" "Node.js" "未安装" "双击 setup.bat 自动装；或 https://nodejs.org/ 下 LTS"
+        }
+    }
+    if (Test-Command "npm") {
+        $mv = (& npm --version 2>&1 | Select-Object -First 1)
+        Write-Check "OK" "npm" "$mv"
+    } else {
+        Write-Check "FAIL" "npm" "未安装" "先安装 Node.js（自带 npm）"
+    }
+
+    # 6. Claude Code
+    if (Test-Command "claude") {
+        try {
+            $cv = (& claude --version 2>&1 | Select-Object -First 1)
+            Write-Check "OK" "Claude Code CLI" "$cv"
+        } catch {
+            Write-Check "WARN" "Claude Code CLI" "命令存在但 --version 失败" "npm install -g @anthropic-ai/claude-code --registry https://registry.npmmirror.com"
+        }
+    } else {
+        $npmBin = Get-NpmGlobalBin
+        if ($npmBin) {
+            $npmDir = Split-Path -Parent $npmBin
+            Write-Check "WARN" "Claude Code CLI" "已安装于 $npmDir 但 PATH 未刷新" "关闭窗口重新双击 setup.bat"
+        } else {
+            Write-Check "FAIL" "Claude Code CLI" "未安装" "双击 setup.bat；或 npm install -g @anthropic-ai/claude-code --registry https://registry.npmmirror.com"
+        }
+    }
+
+    # 7. Git / Python（非硬阻塞）
+    if (Test-Command "git") {
+        $gv = (& git --version 2>&1 | Select-Object -First 1)
+        Write-Check "OK" "Git" "$gv"
+    } else {
+        Write-Check "WARN" "Git" "未安装（Claude 改代码时会用到，本代理不强制）" "winget install Git.Git 或 https://git-scm.com/"
+    }
+    if (Test-Python) {
+        $pv = (& python --version 2>&1 | Select-Object -First 1)
+        Write-Check "OK" "Python" "$pv（仅 OpenAI 协议 provider 需要）"
+    } else {
+        Write-Check "WARN" "Python" "未安装（默认 DeepSeek 直连不需要）" "只在用 Gemini/Moonshot 等 OpenAI 协议时才要装"
+    }
+
+    # 8. API key（只报有无，不回显）
+    $dotenv = Load-DotEnv
+    $hasKey = $false
+    foreach ($k in $dotenv.Keys) {
+        if ($k -match '_API_KEY$' -and -not [string]::IsNullOrWhiteSpace($dotenv[$k])) {
+            $hasKey = $true
+            $tail = $dotenv[$k]
+            if ($tail.Length -gt 4) { $tail = "****" + $tail.Substring($tail.Length - 4) } else { $tail = "****" }
+            Write-Check "OK" "API key" "已找到 $k（$tail）"
+            break
+        }
+    }
+    if (-not $hasKey) {
+        $envFile = Get-DotEnvPath
+        if (Test-Path $envFile) {
+            Write-Check "WARN" "API key" ".env 存在但没有 *_API_KEY 条目" "重新双击 setup.bat，在提示处粘贴 key"
+        } else {
+            Write-Check "WARN" "API key" "尚未配置（首次启动会提示粘贴）" "双击 setup.bat，按提示粘贴"
+        }
+    }
+
+    # 9. 磁盘
+    try {
+        $sys = Split-Path $env:SystemDrive -Qualifier
+        $drive = Get-PSDrive -Name ($sys -replace ':','') -ErrorAction Stop
+        $freeGB = [math]::Round($drive.Free / 1GB, 1)
+        if ($freeGB -ge 2) {
+            Write-Check "OK" "磁盘空间" "$sys 可用 $freeGB GB"
+        } elseif ($freeGB -ge 0.5) {
+            Write-Check "WARN" "磁盘空间" "$sys 可用 $freeGB GB" "装 Node+Claude 至少预留 1GB 以上"
+        } else {
+            Write-Check "FAIL" "磁盘空间" "$sys 可用 $freeGB GB" "清理磁盘后再装"
+        }
+    } catch {
+        Write-Check "WARN" "磁盘空间" "无法读取"
+    }
+
+    # 10. 网络（短超时，单项失败不阻断其它检查）
+    $netTests = @(
+        @{ Name = "npmmirror（国内装包）"; Url = "https://registry.npmmirror.com/@anthropic-ai/claude-code"; Timeout = 5 }
+        @{ Name = "npmjs（官方源）";     Url = "https://registry.npmjs.org/@anthropic-ai/claude-code"; Timeout = 5 }
+        @{ Name = "DeepSeek API 端点";   Url = "https://api.deepseek.com/"; Timeout = 5 }
+    )
+    foreach ($t in $netTests) {
+        try {
+            $r = Invoke-WebRequest -Uri $t.Url -Method Head -TimeoutSec $t.Timeout -UseBasicParsing -ErrorAction Stop
+            Write-Check "OK" "网络 $($t.Name)" "HTTP $($r.StatusCode)"
+        } catch {
+            # Head 可能被拒，再试 GET
+            try {
+                $r2 = Invoke-WebRequest -Uri $t.Url -TimeoutSec $t.Timeout -UseBasicParsing -ErrorAction Stop
+                Write-Check "OK" "网络 $($t.Name)" "HTTP $($r2.StatusCode)"
+            } catch {
+                $isMirror = $t.Name -match "npmmirror"
+                Write-Check ($(if ($isMirror) { "WARN" } else { "WARN" })) "网络 $($t.Name)" "连不上或超时" "检查代理/防火墙；装包优先靠 npmmirror"
+            }
+        }
+    }
+
+    # 11. setup.bat 换行（若在同目录）
+    $setupPath = Join-Path (Split-Path -Parent $PSCommandPath) "setup.bat"
+    if (Test-Path $setupPath) {
+        $sb = [System.IO.File]::ReadAllBytes($setupPath)
+        $hasBom = $sb.Length -ge 3 -and $sb[0] -eq 239 -and $sb[1] -eq 187 -and $sb[2] -eq 191
+        $text = [System.Text.Encoding]::UTF8.GetString($sb)
+        $hasCrlf = $text -match "`r`n"
+        if ($hasBom) {
+            Write-Check "FAIL" "setup.bat 编码" "带了 UTF-8 BOM（会导致 cmd 闪退）" "用 VS Code 保存为 UTF-8（无 BOM）+ CRLF，或重新下载 ZIP"
+        } elseif ($hasCrlf) {
+            Write-Check "OK" "setup.bat 编码" "无 BOM，CRLF 正常"
+        } else {
+            Write-Check "WARN" "setup.bat 编码" "无 BOM，但可能是 LF 换行" "VS Code 右下角改成 CRLF"
+        }
+    }
+
+    Write-Host ""
+    Write-Host "  ════════ 体检结果：通过 $script:DoctorPass · 警告 $script:DoctorWarn · 失败 $script:DoctorFail ════════" -ForegroundColor Cyan
+    if ($script:DoctorFail -gt 0) {
+        Write-Host "  存在会阻塞启动的问题（红色项）。请按每行「修复」提示处理后重试。" -ForegroundColor Red
+        Write-Host "  求助时请复制本窗口全部文字（不含 API key 明文）。" -ForegroundColor Gray
+    } elseif ($script:DoctorWarn -gt 0) {
+        Write-Host "  核心项可通过，但有警告。默认 DeepSeek 直连通常仍可启动。" -ForegroundColor Yellow
+    } else {
+        Write-Host "  环境就绪。双击 setup.bat 即可启动。" -ForegroundColor Green
+    }
+    Write-Host ""
+    return ($script:DoctorFail -eq 0)
 }
 
 # ── 自动更新（默认仅检查并提示；下载替换只在显式 -Update 时发生）──
@@ -694,6 +995,7 @@ function Show-Usage {
     Write-Host '   .\claude-proxy.ps1 -Provider mimo               # 切到 MiMo（Anthropic 直连）' -ForegroundColor Gray
     Write-Host '   .\claude-proxy.ps1 -Provider moonshot           # OpenAI 格式，自动 LiteLLM 转换' -ForegroundColor Gray
     Write-Host '   .\claude-proxy.ps1 -List                        # 列出所有 provider' -ForegroundColor Gray
+    Write-Host '   .\claude-proxy.ps1 -Doctor                      # 一键体检环境（新电脑部署先跑这个）' -ForegroundColor Gray
     Write-Host '   .\claude-proxy.ps1 -Help                        # 显示本帮助' -ForegroundColor Gray
     Write-Host '   .\claude-proxy.ps1 -Provider custom -BaseUrl "https://..." -ApiKey "sk-..." -Model "xxx" -Protocol openai' -ForegroundColor Gray
     Write-Host '   .\claude-proxy.ps1 -Provider deepseek -Model deepseek-v4-flash  # 覆盖模型' -ForegroundColor Gray
@@ -907,7 +1209,7 @@ function Stop-LiteLlmProxy {
 
 # =================== 主逻辑 ===================
 
-# 帮助 / 列表：尽早处理，不联网、不做依赖检查
+# 帮助 / 列表 / 体检：尽早处理，不启动 Claude
 if ($Help) {
     Show-Usage
     Show-Providers
@@ -916,6 +1218,10 @@ if ($Help) {
 if ($List) {
     Show-Providers
     exit 0
+}
+if ($Doctor) {
+    $ok = Invoke-Doctor
+    if ($ok) { exit 0 } else { exit 1 }
 }
 
 # ── 自动更新：默认只检查并提示（不自动下载执行）；-Update 才真正下载替换 ──

@@ -17,3 +17,7 @@ providers.local.ps1
 # 自动更新留下的本地文件
 .update-check
 *.ps1.bak
+
+# 离线打包产物（含 Node 安装包，体积大且不入库）
+dist/
+stage-*/

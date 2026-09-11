@@ -1,8 +1,10 @@
 # claude-proxy
 
-**把 Claude Code 路由到任意 AI 提供商的 PowerShell 启动脚本。**
+**把 Claude Code 路由到任意 AI 提供商的 PowerShell 启动脚本。** 当前版本 **v1.3.0**。
 
-> 第一次用、不懂编程？请直接看 **[小白教程 TUTORIAL.md](./TUTORIAL.md)**，那里一步步带你跑通。本文档偏技术参考。
+> 源码仓库：<https://github.com/fisHarly0/claude-proxy>
+
+> 第一次用、不懂编程？请直接看 **[小白教程 TUTORIAL.md](./TUTORIAL.md)**，那里一步步带你跑通（含「新电脑冷启动」时间线）。本文档偏技术参考。
 
 Claude Code 官方只能连接 Anthropic 的 API。如果你有 DeepSeek、Gemini、通义千问等其他 AI 服务的 API key，想在 Claude Code 里用它们，就需要一个"代理"把请求转发过去。claude-proxy 就是做这件事的——它是一个 PowerShell 脚本，帮你配置好一切环境变量，让 Claude Code 无缝连接到你选择的 AI 提供商。
 
@@ -69,6 +71,9 @@ Claude Code 官方只能连接 Anthropic 的 API。如果你有 DeepSeek、Gemin
 # 列出所有可用 provider
 .\claude-proxy.ps1 -List
 
+# 一键体检（新电脑部署不顺时先跑这个）
+.\claude-proxy.ps1 -Doctor
+
 # 显示帮助
 .\claude-proxy.ps1 -Help
 ```
@@ -80,15 +85,18 @@ Claude Code 官方只能连接 Anthropic 的 API。如果你有 DeepSeek、Gemin
 ```
 claude-proxy/
 ├── claude-proxy.ps1              # 主脚本（-Update 时会覆盖此文件）
-├── setup.bat                     # 一键启动器（双击即可）
+├── setup.bat                     # 一键启动器（双击即可；失败会提示跑 -Doctor）
 ├── providers.local.example.ps1   # 自定义/扩展 provider 的模板
 ├── providers.local.ps1           # 你的自定义 provider（更新不覆盖，已在 .gitignore）
 ├── .env                          # API key 存储（更新不覆盖，已在 .gitignore，运行时自动生成）
 ├── VERSION                       # 版本号文件
+├── tools/
+│   ├── release-gate.ps1          # 发版前编码/版本/语法闸门
+│   └── pack-offline.ps1          # 生成新电脑离线安装包 ZIP
 ├── .gitignore                    # Git 忽略规则
 ├── .gitattributes                # Git 换行符规则（锁定 CRLF / BOM）
 ├── LICENSE                       # MIT 许可证
-├── TUTORIAL.md                   # 小白教程
+├── TUTORIAL.md                   # 小白教程（含新电脑冷启动时间线）
 └── README.md                     # 本文件
 ```
 
@@ -173,6 +181,7 @@ $LocalProviders = @{
 | `-SharedConfig` | 使用共享配置目录 | `-SharedConfig` |
 | `-WorkDir` | 指定工作目录 | `-WorkDir "C:\project"` |
 | `-List` | 列出所有 provider | `-List` |
+| `-Doctor` | 一键体检环境/网络/编码 | `-Doctor` |
 | `-Help` | 显示帮助（`-h` 同义） | `-Help` |
 | `-SkipChecks` | 跳过依赖检查 | `-SkipChecks` |
 | `-Update` | 手动下载并应用更新 | `-Update` |
@@ -223,7 +232,24 @@ $LocalProviders = @{
 - 下载后做"非空 + 含版本标记 + 语法可解析"的**格式校验**，旧版按版本号备份为 `claude-proxy.<旧版本>.bak`。
 - **安全说明**：`-Update` 从上述公开镜像拉取，仅做格式校验，**不验证数字签名**（不防"镜像被投毒"这类来源伪造）。如果你对供应链安全敏感，请只用"去 GitHub 手动下载"的方式更新。
 - 更新只替换 `claude-proxy.ps1` 本身，`.env`、`providers.local.ps1`、`setup.bat` 都不动。
-- 注意：`README.md` / `TUTORIAL.md` **不随 `-Update` 分发**，文档最新版以 GitHub 仓库为准。
+- 注意：`README.md` / `TUTORIAL.md` / `tools/` **不随 `-Update` 分发**，文档与工具最新版以 GitHub 仓库为准。
+
+---
+
+## 国内网络 / 新电脑加固
+
+- **npm 装 Claude Code**：默认源失败会自动改用 `registry.npmmirror.com` 再试一次。
+- **winget 装 Node**：失败会给出官网 + npmmirror 手动安装路径，装完重新双击 `setup.bat`。
+- **安装冒烟**：`claude` 装好后会跑一次 `claude --version`，避免"命令在但包半残"。
+- **离线包**（维护者用）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\pack-offline.ps1
+# 或优先国内镜像下 Node：
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\pack-offline.ps1 -NodeMirror
+```
+
+产出 `dist/claude-proxy-offline-v*-win-x64.zip`（含 Node msi + 脚本 + 离线说明；**绝不打包 `.env`**）。
 
 ---
 
@@ -247,6 +273,17 @@ $LocalProviders = @{
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 或者直接用 `setup.bat`，它通常会自动处理（若被组策略锁定则可能仍需手动设置）。
+
+### 新电脑部署失败 / 不知道卡在哪
+
+```powershell
+.\claude-proxy.ps1 -Doctor
+# 或
+setup.bat -Doctor
+```
+
+逐项绿/黄/红 + 修复建议；求助时复制完整输出（不含 API key 明文）。  
+更完整的冷启动对照表见 [TUTORIAL.md · 新电脑冷启动](./TUTORIAL.md)。
 
 ### 如何验证代理是否生效？
 
@@ -284,18 +321,20 @@ Claude Code → Anthropic 协议 → LiteLLM (本地) → OpenAI 协议 → 目�
 **发布新版流程：**
 
 1. 修改 `claude-proxy.ps1` 顶部的 `$SCRIPT_VERSION` 和根目录 `VERSION` 文件（**同时改**）
-2. **【发版前必做·编码闸门】** 确认字节未被编辑器破坏（任一不符必须改回再提交）：
+2. **【发版前必做·闸门】** 在仓库根目录执行：
    ```powershell
-   # claude-proxy.ps1 / providers.local.example.ps1 必须以 UTF-8 BOM 开头（前 3 字节 239,187,191）
-   (Get-Content .\claude-proxy.ps1 -Encoding Byte -TotalCount 3) -join ','   # 期望 239,187,191
-   # setup.bat 必须无 BOM 且为 CRLF
-   $b=[IO.File]::ReadAllBytes('.\setup.bat'); "$($b[0]),$($b[1]),$($b[2])"    # 不应是 239,187,191
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\release-gate.ps1
    ```
-3. commit + push 到 `master`
-4. 用户下次启动会收到"有新版"提示，运行 `-Update` 或重新下载即可升级。
-   - 注意：`-Update` 只分发 `claude-proxy.ps1` + `VERSION`。若本次改了 `README` / `setup.bat` / 模板，请在 release notes 里提醒用户重新下载整个仓库。
+   闸门会检查：BOM（`claude-proxy.ps1` / 模板必须 UTF-8 BOM）、`setup.bat` 无 BOM + CRLF、`VERSION` 与 `$SCRIPT_VERSION` 一致、PowerShell 语法可解析。**任一 FAIL 禁止发版。**
+3. 手工抽查（闸门之外）：
+   ```powershell
+   (Get-Content .\claude-proxy.ps1 -Encoding Byte -TotalCount 3) -join ','   # 期望 239,187,191
+   ```
+4. commit + push 到 `master`
+5. 用户下次启动会收到"有新版"提示，运行 `-Update` 或重新下载即可升级。
+   - 注意：`-Update` 只分发 `claude-proxy.ps1` + `VERSION`。若本次改了 `README` / `setup.bat` / `tools/`，请在 release notes 里提醒用户重新下载整个仓库。
 
-> **编码铁律**：`claude-proxy.ps1`、`providers.local.example.ps1` 必须存成 **UTF-8 with BOM**（PS 5.1 需要 BOM 才能正确解码中文）；`setup.bat` 必须是 **CRLF 换行、无 BOM**。很多编辑器保存时会偷偷去掉 BOM 或改成 LF，改完务必用上面的命令检查。
+> **编码铁律**：`claude-proxy.ps1`、`providers.local.example.ps1` 必须存成 **UTF-8 with BOM**（PS 5.1 需要 BOM 才能正确解码中文）；`setup.bat` 必须是 **CRLF 换行、无 BOM**。以 `tools/release-gate.ps1` 为准，不要只靠记忆。
 
 ---
 

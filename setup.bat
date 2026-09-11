@@ -37,9 +37,13 @@ set "PROXY_EXIT=%errorlevel%"
 echo.
 if not "%PROXY_EXIT%"=="0" (
   echo  [提示] 启动似乎未正常完成（退出码 %PROXY_EXIT%）。
-  echo         若提示"禁止运行脚本/无法加载脚本"，多半是被组策略限制，
-  echo         请在 PowerShell 运行: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned 后重试。
+  echo         1^) 先跑一键体检:  setup.bat -Doctor
+  echo            （或在 PowerShell 中: .\claude-proxy.ps1 -Doctor）
+  echo         2^) 若提示"禁止运行脚本/无法加载脚本"，请在 PowerShell 运行:
+  echo            Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+  echo         3^) 求助时请复制体检窗口全部文字（不会带出 API key）。
   echo.
 )
 echo  ====== Claude 已退出 ======
 pause
+

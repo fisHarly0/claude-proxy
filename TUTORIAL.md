@@ -91,7 +91,7 @@ claude-proxy 就是一个"中间人"——它帮你配置好环境变量，让 C
 
 ```
   ════════ Claude Code 代理 ════════
-   版本     : v1.2.0
+   版本     : v1.3.0
    Provider : deepseek (DeepSeek)
    模型     : deepseek-v4-pro
    协议     : Anthropic (直连)
@@ -104,6 +104,47 @@ claude-proxy 就是一个"中间人"——它帮你配置好环境变量，让 C
 然后 Claude Code 就启动了，你可以正常使用它。
 
 **验证代理是否生效：** 在 Claude Code 里输入 `/model`，显示的模型名应该与上面一致。
+
+---
+
+## 新电脑冷启动：完整时间线（对着看）
+
+**这台电脑之前从没装过 Claude Code？** 按下面时间线对照：每一步「应该看到什么」、卡住了把哪段文字发出去。
+
+| 步骤 | 你应该看到 | 卡住时怎么做 |
+|------|------------|--------------|
+| 1. 解压 ZIP | 文件夹里有 `setup.bat`、`claude-proxy.ps1` | 路径尽量不要带奇怪符号；**不要**用浏览器另存为单个 ps1 |
+| 2. 双击 setup.bat | 黑窗口 +「====== Claude Proxy 启动器 ======」 | 没窗口？可能被杀软拦了，加白名单后再双击 |
+| 3. 检查依赖 | 显示 Node / Claude 是否已装 | 出现红色失败：见下方「失败了先跑体检」 |
+| 4. 自动装 Node | 「通过 winget 安装 Node.js LTS…」可能 1–5 分钟 | 失败：去 https://nodejs.org/ 下 LTS 安装后**重新双击 setup.bat**；国内可试 https://npmmirror.com/mirrors/node/ |
+| 5. 自动装 Claude Code | 先试默认 npm 源，失败会自动切 **npmmirror 国内镜像** | 仍失败：`npm install -g @anthropic-ai/claude-code --registry https://registry.npmmirror.com` |
+| 6. 粘贴 API key | 屏幕**看不到字符是正常的**，粘贴后回车 | 空粘贴：再来一次；确认复制的是完整 key |
+| 7. 代理横幅 | 「══ Claude Code 代理 ══」+ 版本/模型/端点 | 没横幅 = 依赖或 key 未过，往上翻红字 |
+| 8. Claude 首启 | 可能问主题、是否信任目录、或登录引导 | **选默认/跳过**。代理已注入环境变量，一般**不需要**登 Anthropic 官方账号 |
+| 9. 验证 | Claude 里 `/model`，模型名与横幅一致 | 不一致：关掉窗口重新双击 setup.bat |
+
+### 失败了先跑体检
+
+```powershell
+.\claude-proxy.ps1 -Doctor
+```
+
+或：
+
+```bat
+setup.bat -Doctor
+```
+
+体检逐项打出 **[OK] / [WARN] / [FAIL]** 和「修复」说明。  
+**求助时把整个窗口文字复制发出去即可**（不会打印 API key 明文）。
+
+### Claude Code 第一次打开长什么样？
+
+DeepSeek / MiMo 等场景下，脚本已设好 `ANTHROPIC_AUTH_TOKEN` 等环境变量。首启若出现：
+
+- 选主题 → 随便选  
+- 是否信任此文件夹 → 项目目录选信任  
+- 登录引导 → 先试**跳过 / 使用环境变量**；若强制要 Anthropic 官方账号，说明代理环境变量没生效，回去跑 `-Doctor`
 
 ---
 
@@ -204,9 +245,10 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 **原因：** 这些软件还没装，或者刚装完 PATH 没生效。
 
 **解决方法：**
-1. 脚本会自动帮你装，等它装完
+1. 脚本会自动帮你装，等它装完（Claude Code 失败时会自动换国内 npmmirror 再试）
 2. 如果装完后还是找不到，**关闭当前窗口，重新双击 `setup.bat`**
 3. 脚本有自动重开机制（最多 3 次），大多数情况不需要手动操作
+4. 仍失败：跑 `.\claude-proxy.ps1 -Doctor`，把体检结果原样发出
 
 ### 问题 3：粘贴 API key 后提示"key 未设置"
 
@@ -256,9 +298,10 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 ### 问题 9：还是不行
 
-1. 检查你的 Windows 版本（需要 Win10 或 Win11）
-2. 去 GitHub 项目的 Issues 页面搜索你的问题，或者提一个新 Issue
-3. 提 Issue 时请附上（**注意不要截到 API key**）：
-   - 你的 Windows 版本
+1. 先跑 `.\claude-proxy.ps1 -Doctor`，复制**完整体检输出**
+2. 检查你的 Windows 版本（需要 Win10 或 Win11）
+3. 去 GitHub 项目的 Issues 页面搜索你的问题，或者提一个新 Issue
+4. 提 Issue 时请附上（**注意不要截到 API key**）：
+   - 体检输出
    - 完整的错误信息（截图或复制文字）
    - 你运行的命令
