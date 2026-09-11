@@ -192,17 +192,26 @@ $LocalProviders = @{
 
 ### 预置 Provider
 
-| Provider | 协议 | 状态 | 说明 |
-|----------|------|------|------|
-| DeepSeek | Anthropic | 默认启用 | DeepSeek 官方 Anthropic 端点，直连无需 LiteLLM |
-| MiMo | Anthropic | 启用 | 小米 MiMo，国内直连 |
-| OpenRouter | Anthropic | 模板 | 多模型聚合 |
-| Gemini | OpenAI | 模板 | Google Gemini |
-| Moonshot | OpenAI | 模板 | 月之暗面 Kimi |
-| 智谱 GLM | OpenAI | 模板 | 智谱 AI |
-| 通义千问 | OpenAI | 模板 | 阿里云 DashScope |
+主脚本 `claude-proxy.ps1` 里**开箱即用、无需任何配置**的只有两个（均为 Anthropic 直连），不传 `-Provider` 时默认走 DeepSeek：
 
-> "模板"表示默认未启用。**启用方式不是去改主脚本，而是把对应块复制进 `providers.local.ps1`**（见上方"添加自己的 Provider"）。模板都在 `providers.local.example.ps1` 里，取消注释即可。
+| Provider | 协议 | 默认模型 | 小型快速模型 | 说明 |
+|----------|------|----------|--------------|------|
+| `deepseek` | Anthropic | `deepseek-v4-pro` | `deepseek-v4-flash` | DeepSeek 官方 Anthropic 端点，直连无需 LiteLLM（默认 provider） |
+| `mimo` | Anthropic | `mimo-v2.5-pro` | `mimo-v2.5-pro` | 小米 MiMo，国内直连 |
+
+其余 provider 以**注释模板**形式提供（默认未启用），需要复制进 `providers.local.ps1` 并取消注释后才能用。`providers.local.example.ps1` 里随脚本附带的模板有：
+
+| Provider | 协议 | 默认模型 | 说明 |
+|----------|------|----------|------|
+| `openrouter` | Anthropic | `anthropic/claude-sonnet-4` | 多模型聚合，直连 |
+| `gemini` | OpenAI | `gemini-2.5-pro` | Google Gemini（需 LiteLLM 转换） |
+| `moonshot` | OpenAI | `moonshot-v1-128k` | 月之暗面 Kimi（需 LiteLLM 转换） |
+| `zhipu` | OpenAI | `glm-4-plus` | 智谱 GLM（需 LiteLLM 转换） |
+| `qwen` | OpenAI | `qwen-max` | 阿里云通义千问 DashScope（需 LiteLLM 转换） |
+
+> 主脚本注释区里还另带 `baichuan`（百川智能）、`local-openai`（Ollama 等本地 OpenAI 兼容服务）两个示例块，可参照同样方式抄进 `providers.local.ps1`。
+>
+> **启用方式不是去改主脚本**（主脚本会被 `-Update` 覆盖），**而是把对应块复制进 `providers.local.ps1` 后取消注释**（见上方"添加自己的 Provider"）。
 
 ---
 
@@ -261,7 +270,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 Claude Code → Anthropic 协议 → LiteLLM (本地) → OpenAI 协议 → 目标 AI
 ```
 
-- 自动检测 Python 和 LiteLLM 是否可用，首次使用自动安装（`pip install litellm`）
+- 自动检测 Python 和 LiteLLM proxy 依赖是否可用，首次使用自动安装（`python -m pip install "litellm[proxy]"`）
 - 起本地代理时自动选空闲端口，上游 key 走临时配置 + 环境变量（不上命令行）
 - Claude Code 退出时自动停止代理并清理临时文件
 - 默认的 DeepSeek 是 Anthropic 直连，**不经过这条链路**，无需 Python

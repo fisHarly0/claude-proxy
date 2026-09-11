@@ -26,11 +26,11 @@
 
 param(
     [string]$Provider,        # provider 名称（对应下面 $PROVIDERS 的 key）
-    [string]$BaseUrl,         # 自定义 provider 的 API 端点
-    [string]$ApiKey,          # 自定义 provider 的 API key
+    [string]$BaseUrl,         # 自定义 provider 的 API 端点，或覆盖已注册 provider
+    [string]$ApiKey,          # 自定义 provider 的 API key，或覆盖已注册 provider
     [string]$Model,           # 自定义 provider 的模型名，或覆盖已有 provider 的默认模型
     [string]$SmallFastModel,  # 用于小型快速任务的模型（可选，默认跟主模型一样）
-    [string]$Protocol,        # 自定义 provider 的协议：anthropic 或 openai（默认 anthropic）
+    [string]$Protocol,        # 自定义/覆盖 provider 的协议：anthropic 或 openai
     [switch]$SharedConfig,    # 加此开关则使用 ~/.claude 共享配置，否则每个 provider 隔离
     [switch]$List,            # 列出所有已注册 provider
     [Alias('h')]
@@ -118,7 +118,7 @@ $PROVIDERS = @{
 
     # ══════════════════════════════════════════════
     #  OpenAI 格式（自动通过 LiteLLM 转换）
-    #  首次使用会自动安装 LiteLLM（pip install litellm，需要 Python）
+    #  首次使用会自动安装 LiteLLM proxy 依赖（需要 Python）
     # ══════════════════════════════════════════════
 
     # "gemini" = @{
@@ -720,7 +720,8 @@ function Test-Python {
 # 检查 LiteLLM 是否已安装
 function Test-LiteLlm {
     try {
-        $result = python -c "import litellm; print('ok')" 2>&1
+        # Import the proxy server itself so a base-only litellm install is rejected.
+        $result = python -c "import litellm, backoff, orjson, redis, boto3; import litellm.proxy.proxy_server; print('ok')" 2>&1
         if ($result -match "ok") { return $true }
     } catch {}
     return $false
@@ -729,15 +730,15 @@ function Test-LiteLlm {
 # 安装 LiteLLM
 function Install-LiteLlm {
     Write-Host "  [信息] 正在安装 LiteLLM..." -ForegroundColor Yellow
-    Write-Host "         pip install litellm" -ForegroundColor Gray
+    Write-Host "         python -m pip install 'litellm[proxy]'" -ForegroundColor Gray
     Write-Host "         国内网络可能较慢，请耐心等待，不要关闭窗口" -ForegroundColor Gray
     Write-Host ""
-    pip install litellm
+    python -m pip install "litellm[proxy]"
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         Write-Host "  [错误] LiteLLM 自动安装失败（多半是网络 / Python 环境问题）" -ForegroundColor Red
         Write-Host "         请检查网络后，关掉本窗口重新双击 setup.bat 再试" -ForegroundColor Yellow
-        Write-Host "         (高级用户可手动: pip install litellm)" -ForegroundColor DarkGray
+        Write-Host "         (高级用户可手动: python -m pip install 'litellm[proxy]')" -ForegroundColor DarkGray
         Write-Host ""
         return $false
     }
@@ -758,8 +759,8 @@ function Get-FreePort {
 # 每次起新代理前先收尸，避免孤儿累积导致此后启动神秘失败。
 function Clear-StaleLiteLlm {
     try {
-        Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.CommandLine -and $_.CommandLine -match '-m\s+litellm' -and $_.CommandLine -match '127\.0\.0\.1' } |
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and $_.CommandLine -match '(?i)(-m\s+litellm|litellm(?:\.exe)?\s+.*--host)' -and $_.CommandLine -match '127\.0\.0\.1' } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     } catch {}
 }
@@ -786,12 +787,15 @@ function Start-LiteLlmProxy {
     $stderrLog = Join-Path $env:TEMP ("litellm-{0}-{1}.err.log" -f $Port, [guid]::NewGuid().ToString('N'))
 
     # 用 config 文件 + 环境变量传 key，【不把 key 放命令行】（命令行对同机所有进程可见）。
-    # 通配路由 model_name="*" / model="openai/*"：请求里的任何模型名（主模型 / small-fast）都原样转发到上游。
+    # 通配路由 model_name="*" / model="aiohttp_openai/*"：请求里的任何模型名
+    # （主模型 / small-fast）都原样转发到上游的 Chat Completions 端点。
+    # 使用 aiohttp_openai 是为了避免 LiteLLM 对 gpt-5.4+ 模型自动桥接到
+    # Responses API；部分第三方网关的 Responses input 只接受字符串。
     $cfgLines = @(
         "model_list:",
         '  - model_name: "*"',
         "    litellm_params:",
-        '      model: "openai/*"',
+        '      model: "aiohttp_openai/*"',
         "      api_base: $TargetBaseUrl",
         "      api_key: os.environ/UPSTREAM_API_KEY"
     )
@@ -801,8 +805,20 @@ function Start-LiteLlmProxy {
     $env:UPSTREAM_API_KEY = $TargetApiKey
     $env:LITELLM_LOG      = "ERROR"
 
+    $litellmCommand = Get-Command litellm.exe -ErrorAction SilentlyContinue
+    if (-not $litellmCommand) {
+        $litellmCommand = Get-Command litellm -ErrorAction SilentlyContinue
+    }
+    if (-not $litellmCommand) {
+        Write-Host "  [错误] 找不到 LiteLLM 命令入口，请重新安装 litellm[proxy]" -ForegroundColor Red
+        Remove-Item $cfgPath -ErrorAction SilentlyContinue
+        Remove-Item $stdoutLog -ErrorAction SilentlyContinue
+        Remove-Item $stderrLog -ErrorAction SilentlyContinue
+        Remove-Item Env:\UPSTREAM_API_KEY -ErrorAction SilentlyContinue
+        return @{ Process = $null; Port = $Port; Alive = $false; Ready = $false; ConfigPath = $cfgPath; StdoutLog = $stdoutLog; StderrLog = $stderrLog }
+    }
+
     $litellmArgs = @(
-        "-m", "litellm",
         "--host", "127.0.0.1",
         "--port", $Port,
         "--config", $cfgPath
@@ -813,7 +829,7 @@ function Start-LiteLlmProxy {
     Write-Host "         目标: $TargetBaseUrl → $TargetModel" -ForegroundColor Gray
     Write-Host ""
 
-    $process = Start-Process -FilePath "python" -ArgumentList $litellmArgs `
+    $process = Start-Process -FilePath $litellmCommand.Source -ArgumentList $litellmArgs `
         -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutLog `
         -RedirectStandardError $stderrLog
 
@@ -828,7 +844,7 @@ function Start-LiteLlmProxy {
         Start-Sleep -Seconds 1
         $waited++
         try {
-            $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
+            $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2 -UseBasicParsing -ErrorAction SilentlyContinue
             if ($response.StatusCode -eq 200) { $ready = $true; break }
         } catch {
             # 还没启动好，继续等
@@ -968,6 +984,16 @@ if ($Provider -eq "custom") {
     $cfg = @{} + $PROVIDERS[$DEFAULT_PROVIDER]
     $Provider = $DEFAULT_PROVIDER
     $providerProtocol = if ($cfg.protocol) { $cfg.protocol } else { "anthropic" }
+}
+
+# 允许启动脚本覆盖已注册 provider 的连接参数。
+# 这样每个 provider 可以有一个类似 claude-mimo.ps1 的独立启动脚本，
+# 同时仍保留 provider 名称对应的隔离配置目录。
+if (-not $isCustom -and ($BaseUrl -or $ApiKey -or $Protocol -or $SmallFastModel)) {
+    if ($BaseUrl) { $cfg.baseUrl = $BaseUrl }
+    if ($ApiKey) { $cfg.apiKey = $ApiKey }
+    if ($SmallFastModel) { $cfg.smallFast = $SmallFastModel }
+    if ($Protocol) { $providerProtocol = $Protocol.ToLower() }
 }
 
 # 允许 -Model 覆盖已注册 provider 的默认模型

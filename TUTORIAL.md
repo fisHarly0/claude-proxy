@@ -223,7 +223,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 **解决方法：**
 1. 关掉窗口，重新双击 `setup.bat` 再试一次（多半是网络问题）
-2. 手动安装 LiteLLM：打开 PowerShell，运行 `pip install litellm`
+2. 手动安装 LiteLLM：打开 PowerShell，运行 `python -m pip install "litellm[proxy]"`
 3. 如果 `pip` 命令找不到，说明 Python 没装好，去 https://www.python.org/downloads/ 下载安装
 4. 默认的 DeepSeek 不用 LiteLLM，可以先用它
 
