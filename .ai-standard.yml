@@ -1,0 +1,17 @@
+standard: "AI长期协作工程规范"
+standardVersion: "1.0"
+projectCompatibility: ">=1.0"
+project: "claude-proxy"
+standard_entry: "D:/AAA PROJECT/real-vibecoding-harries/操作手册/首次打开统一流程.md"
+authority:
+  readme: "README.md"
+  script: "claude-proxy.ps1"
+  providers_template: "providers.local.example.ps1"
+  state: "memory/current-state.md"
+  handoff: "memory/"
+workflow:
+  require_plan_before_code: true
+  require_encoding_gate: true
+security:
+  secrets_in_repository: false
+  update_requires_format_validation: true
