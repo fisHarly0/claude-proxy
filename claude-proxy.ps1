@@ -1,10 +1,10 @@
 ﻿# ============================================================
 #  claude-proxy.ps1
-#  把 Claude Code 路由到任意 AI 提供商（Anthropic / OpenAI 格式均支持）
+#  多 API 独立 Claude Code 启动器；Anthropic 兼容直连，OpenAI 转换为实验功能。
 #
 #  默认 provider 是 DeepSeek，走官方 Anthropic 协议直连，无需 LiteLLM / Python。
 #  对于只提供 OpenAI 格式的 provider（如 Moonshot、智谱、通义 等），
-#  脚本会自动启动 LiteLLM 做协议转换，无需手动操作。
+#  脚本会启动 LiteLLM 尝试协议转换，需另行验证流式输出和工具调用兼容性。
 #
 #  用法：
 #    .\claude-proxy.ps1                              # 使用默认 provider（deepseek，直连）
@@ -33,6 +33,8 @@ param(
     [string]$SmallFastModel,  # 用于小型快速任务的模型（可选，默认跟主模型一样）
     [string]$Protocol,        # 自定义/覆盖 provider 的协议：anthropic 或 openai
     [switch]$SharedConfig,    # 加此开关则使用 ~/.claude 共享配置，否则每个 provider 隔离
+    [string]$InstanceDir,     # 生成器创建的实例目录，配置与 key 均独立
+    [switch]$PrepareOnly,     # 图形入口后台准备依赖，完成后退出，不启动会话
     [switch]$List,            # 列出所有已注册 provider
     [switch]$Doctor,          # 一键体检环境/网络/编码，不启动 Claude
     [Alias('h')]
@@ -62,7 +64,7 @@ try {
 
 # =================== 自动更新配置 ===================
 # 版本号：发布新版时手动 +1，同时更新仓库根目录的 VERSION 文件。
-$SCRIPT_VERSION = "1.3.0"
+$SCRIPT_VERSION = "1.5.0"
 $UPDATE_REPO    = "fisHarly0/claude-proxy"   # GitHub owner/repo
 $UPDATE_BRANCH  = "master"
 
@@ -204,7 +206,7 @@ $DEFAULT_PROVIDER = "deepseek"
 # 这些 provider 会自动合并进 $PROVIDERS，且【自动更新覆盖主脚本时不会动这个文件】。
 # 可选 $LocalDefaultProvider 覆盖默认 provider。模板见 providers.local.example.ps1。
 $localProviderFile = if ($PSScriptRoot) { Join-Path $PSScriptRoot "providers.local.ps1" } else { Join-Path (Get-Location) "providers.local.ps1" }
-if (Test-Path $localProviderFile) {
+if (-not $InstanceDir -and (Test-Path $localProviderFile)) {
     try {
         . $localProviderFile
         if ($LocalProviders -is [hashtable]) {
@@ -397,8 +399,15 @@ function Test-ClaudeSmoke {
 # 确保 Claude Code CLI 已安装
 function Ensure-ClaudeCode {
     if (Test-Command "claude") {
-        return $true
+        if (Test-ClaudeSmoke) { return $true }
     }
+    # 原生安装不依赖 Node；先检查已安装但尚未加入 PATH 的官方目录。
+    $nativeBin = Join-Path $env:USERPROFILE '.local\bin'
+    if (Test-Path -LiteralPath (Join-Path $nativeBin 'claude.exe')) {
+        $env:PATH = "$nativeBin;$env:PATH"
+        if (Test-ClaudeSmoke) { return $true }
+    }
+    if (Install-ClaudeNative) { return $true }
     Write-Host ""
     Write-Host "  [前置] 未检测到 'claude' 命令（Claude Code CLI）" -ForegroundColor Cyan
 
@@ -430,6 +439,39 @@ function Ensure-ClaudeCode {
     }
     Test-ClaudeSmoke | Out-Null
     return $true
+}
+
+# 安装逻辑依据官方 install.ps1 审阅实现；不下载执行 PowerShell 脚本。
+function Install-ClaudeNative {
+    if (-not [Environment]::Is64BitProcess) { return $false }
+    $binaryPath = $null
+    try {
+        $cacheRoot = if ($env:CLAUDE_PROXY_CACHE_DIR) { $env:CLAUDE_PROXY_CACHE_DIR } elseif ($InstanceDir) { Join-Path $InstanceDir '.cache' } else { Join-Path $PSScriptRoot '.cache' }
+        [IO.Directory]::CreateDirectory($cacheRoot) | Out-Null
+        $base = 'https://downloads.claude.ai/claude-code-releases'
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        Write-Host '  [安装] 正在下载 Claude Code 原生程序，无需预装 Node.js…'
+        $version = ([string](Invoke-RestMethod -Uri "$base/latest" -TimeoutSec 30 -ErrorAction Stop)).Trim()
+        if ($version -notmatch '^\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?$') { throw '下载服务未返回有效版本。' }
+        $platform = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'win32-arm64' } else { 'win32-x64' }
+        $manifest = Invoke-RestMethod -Uri "$base/$version/manifest.json" -TimeoutSec 30 -ErrorAction Stop
+        $checksum = [string]$manifest.platforms.$platform.checksum
+        if ($checksum -notmatch '^[a-fA-F0-9]{64}$') { throw '下载清单没有有效的文件校验值。' }
+        $binaryPath = Join-Path $cacheRoot ('claude-install-' + [guid]::NewGuid().ToString('N') + '.exe')
+        Invoke-WebRequest -Uri "$base/$version/$platform/claude.exe" -OutFile $binaryPath -UseBasicParsing -TimeoutSec 600 -ErrorAction Stop
+        if ((Get-FileHash -LiteralPath $binaryPath -Algorithm SHA256).Hash -ne $checksum) { throw '下载文件校验失败，未运行安装程序。' }
+        Write-Host '  [安装] 文件校验通过，正在安装 Claude Code…'
+        & $binaryPath install stable | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw '原生安装程序返回失败。' }
+        $env:PATH = (Join-Path $env:USERPROFILE '.local\bin') + ';' + $env:PATH
+        if (-not (Test-ClaudeSmoke)) { throw '安装结束但程序尚不可用。' }
+        return $true
+    } catch {
+        Write-Host '  [提示] 原生安装未完成，将尝试已有的 Node/npm 安装方式。请确认网络可访问官方安装源。' -ForegroundColor Yellow
+        return $false
+    } finally {
+        if ($binaryPath -and (Test-Path -LiteralPath $binaryPath)) { Remove-Item -LiteralPath $binaryPath -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 # 确保 Git 已安装（非阻塞——Claude Code 处理代码时会用到，但本脚本本身不强依赖）
@@ -856,6 +898,7 @@ function Invoke-SelfUpdate {
 # ── .env 文件读写（保存 API key，下次免输入）──
 
 function Get-DotEnvPath {
+    if ($InstanceDir) { return (Join-Path $InstanceDir '.env') }
     if ($PSScriptRoot) { return (Join-Path $PSScriptRoot ".env") }
     return (Join-Path (Get-Location) ".env")
 }
@@ -863,8 +906,8 @@ function Get-DotEnvPath {
 function Load-DotEnv {
     $envFile = Get-DotEnvPath
     $result = @{}
-    if (-not (Test-Path $envFile)) { return $result }
-    foreach ($line in Get-Content $envFile) {
+    if (-not (Test-Path -LiteralPath $envFile)) { return $result }
+    foreach ($line in Get-Content -LiteralPath $envFile -Encoding UTF8) {
         # 跳过空行和注释
         if ($line -match '^\s*(#|$)') { continue }
         if ($line -match '^\s*([^=]+?)\s*=\s*(.*?)\s*$') {
@@ -920,6 +963,21 @@ function Test-IsPlaceholderKey {
 function Resolve-ApiKey {
     param([string]$ProviderName, [string]$CurrentValue, [string]$SignupUrl)
 
+    if ($InstanceDir) {
+        $encryptedPath = Join-Path $InstanceDir 'api-key.dpapi'
+        if (Test-Path -LiteralPath $encryptedPath) {
+            try {
+                $saved = Get-Content -LiteralPath $encryptedPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertTo-SecureString -ErrorAction Stop
+                $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($saved)
+                try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
+                finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+            } catch {
+                Write-Host '  [错误] 无法解密此 Key。请在图形入口重新填写（加密 Key 仅限原 Windows 用户使用）。' -ForegroundColor Red
+                return $null
+            }
+        }
+    }
+
     if (-not (Test-IsPlaceholderKey $CurrentValue)) {
         return $CurrentValue
     }
@@ -931,7 +989,7 @@ function Resolve-ApiKey {
         return $dotenv[$envVar]
     }
 
-    $sysVal = [System.Environment]::GetEnvironmentVariable($envVar)
+    $sysVal = if ($InstanceDir) { $null } else { [System.Environment]::GetEnvironmentVariable($envVar) }
     if (-not [string]::IsNullOrWhiteSpace($sysVal)) {
         return $sysVal
     }
@@ -1001,6 +1059,8 @@ function Show-Usage {
     Write-Host '   .\claude-proxy.ps1 -Provider deepseek -Model deepseek-v4-flash  # 覆盖模型' -ForegroundColor Gray
     Write-Host '   .\claude-proxy.ps1 -SharedConfig                # 用 ~/.claude 共享配置' -ForegroundColor Gray
     Write-Host '   .\claude-proxy.ps1 -WorkDir "C:\my\project"     # 指定工作目录' -ForegroundColor Gray
+    Write-Host '   .\create-launcher.bat                           # 为每个 API 创建独立启动器' -ForegroundColor Gray
+    Write-Host '   .\claude-proxy.ps1 -InstanceDir "D:\实例\工作"   # 从实例目录启动' -ForegroundColor Gray
     Write-Host '   .\claude-proxy.ps1 -Update                      # 手动下载并应用脚本更新' -ForegroundColor Gray
     Write-Host '   .\claude-proxy.ps1 -SkipUpdate                  # 跳过本次更新检查' -ForegroundColor Gray
     Write-Host ""
@@ -1056,17 +1116,6 @@ function Get-FreePort {
     return $port
 }
 
-# 清扫上一次可能残留的 LiteLLM 孤儿进程。
-# 小白常用"点右上角红叉 / 任务管理器结束"退出，这会跳过正常清理，留下隐藏的 python 占着端口。
-# 每次起新代理前先收尸，避免孤儿累积导致此后启动神秘失败。
-function Clear-StaleLiteLlm {
-    try {
-        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object { $_.CommandLine -and $_.CommandLine -match '(?i)(-m\s+litellm|litellm(?:\.exe)?\s+.*--host)' -and $_.CommandLine -match '127\.0\.0\.1' } |
-            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    } catch {}
-}
-
 # 启动 LiteLLM 代理（后台进程），返回进程对象、端口、就绪状态与需清理的临时文件路径。
 function Start-LiteLlmProxy {
     param(
@@ -1076,8 +1125,7 @@ function Start-LiteLlmProxy {
         [int]$Port
     )
 
-    # 起新进程前先清掉上次残留的孤儿
-    Clear-StaleLiteLlm
+    # 不扫描或终止其他 LiteLLM 进程；它们可能属于同时运行的另一个实例。
 
     if ($Port -eq 0) {
         $Port = Get-FreePort
@@ -1209,6 +1257,43 @@ function Stop-LiteLlmProxy {
 
 # =================== 主逻辑 ===================
 
+# 实例参数只读 JSON，不能把内容当作 PowerShell 执行；验证在更新和安装之前完成。
+$instanceSettings = $null
+if ($InstanceDir) {
+    try {
+        foreach ($conflict in @('Provider', 'BaseUrl', 'ApiKey', 'Model', 'SmallFastModel', 'Protocol', 'SharedConfig', 'Update')) {
+            if ($PSBoundParameters.ContainsKey($conflict)) { throw "实例模式不能同时指定 -$conflict。请编辑实例的 profile.json。" }
+        }
+        $instanceItem = Get-Item -LiteralPath $InstanceDir -ErrorAction Stop
+        if (-not $instanceItem.PSIsContainer -or $instanceItem.PSProvider.Name -ne 'FileSystem') { throw '实例目录不存在。' }
+        $InstanceDir = $instanceItem.FullName
+        $instanceSettings = Get-Content -LiteralPath (Join-Path $InstanceDir 'profile.json') -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($instanceSettings.schemaVersion -ne 1) { throw '不支持的 profile.json 版本。' }
+        foreach ($field in @('name', 'baseUrl', 'model', 'smallFastModel', 'protocol', 'workDir')) {
+            $value = $instanceSettings.$field
+            if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace($value) -or $value -match '[\p{C}]') { throw "profile.json 的 $field 无效。" }
+        }
+        $instanceUri = $null
+        if (-not [Uri]::TryCreate($instanceSettings.baseUrl, [UriKind]::Absolute, [ref]$instanceUri) -or
+            $instanceUri.Scheme -notin @('http', 'https') -or -not $instanceUri.Host -or
+            $instanceUri.UserInfo -or $instanceUri.Query -or $instanceUri.Fragment -or $instanceSettings.baseUrl -match '\s') {
+            throw 'profile.json 必须使用不含凭据或查询参数的 http(s) API 基础地址。'
+        }
+        if ($instanceSettings.protocol -notin @('anthropic', 'openai')) { throw 'profile.json 的协议必须为 anthropic 或 openai。' }
+        if ($instanceSettings.model -match '\s' -or $instanceSettings.smallFastModel -match '\s') { throw '模型名不能包含空白。' }
+        if (-not $WorkDir) {
+            $WorkDir = $instanceSettings.workDir
+            if (-not [IO.Path]::IsPathRooted($WorkDir)) { $WorkDir = Join-Path $InstanceDir $WorkDir }
+        }
+        if (-not (Test-Path -LiteralPath $WorkDir -PathType Container)) { throw '工作目录不存在。请修正 profile.json 的 workDir。' }
+        $SkipUpdate = $true
+    } catch {
+        # 不输出 JSON 原文或解析器上下文，避免误填凭据后泄露到日志。
+        Write-Host '  [错误] 实例配置无效、工作目录不存在或使用了冲突参数。检查 profile.json；实例模式不能搭配 provider/连接参数、SharedConfig 或 Update。' -ForegroundColor Red
+        exit 1
+    }
+}
+
 # 帮助 / 列表 / 体检：尽早处理，不启动 Claude
 if ($Help) {
     Show-Usage
@@ -1233,6 +1318,16 @@ if ($Update) {
 
 # ── 前置依赖检查（小白模式，加 -SkipChecks 可跳过）──
 
+# 图形后台安装完成后，新终端仍可能继承图形进程的旧 PATH。
+# 即使跳过重复安装检查，也要找到已经安装的原生程序。
+if ($InstanceDir -and -not (Test-Command 'claude')) {
+    Refresh-Path
+    $nativeBin = Join-Path $env:USERPROFILE '.local\bin'
+    if (Test-Path -LiteralPath (Join-Path $nativeBin 'claude.exe')) {
+        $env:PATH = "$nativeBin;$env:PATH"
+    }
+}
+
 if (-not $SkipChecks) {
     if (-not (Ensure-ClaudeCode)) {
         Write-Host ""
@@ -1248,7 +1343,19 @@ $cfg = $null
 $isCustom = $false
 $providerProtocol = "anthropic"
 
-if ($Provider -eq "custom") {
+if ($instanceSettings) {
+    $Provider = 'instance'
+    $providerProtocol = $instanceSettings.protocol
+    $cfg = @{
+        baseUrl = $instanceSettings.baseUrl
+        apiKey = ''
+        model = $instanceSettings.model
+        smallFast = $instanceSettings.smallFastModel
+        label = $instanceSettings.name
+        protocol = $providerProtocol
+        signupUrl = ''
+    }
+} elseif ($Provider -eq "custom") {
     # 自定义 provider：必须手动指定参数
     if ([string]::IsNullOrWhiteSpace($BaseUrl) -or [string]::IsNullOrWhiteSpace($ApiKey)) {
         Write-Host ""
@@ -1334,8 +1441,8 @@ if (-not $isCustom) {
 # ── 切换工作目录（放在启动代理之前，避免目录无效时白起一个 LiteLLM）──
 
 if ($WorkDir) {
-    if (Test-Path $WorkDir) {
-        Set-Location $WorkDir
+    if (Test-Path -LiteralPath $WorkDir -PathType Container) {
+        Set-Location -LiteralPath $WorkDir
     } else {
         Write-Host ""
         Write-Host "  [错误] 工作目录不存在: $WorkDir" -ForegroundColor Red
@@ -1348,11 +1455,9 @@ if ($WorkDir) {
 
 $useIsolated = -not $SharedConfig
 if ($useIsolated) {
-    $configDir = "$env:USERPROFILE\.claude-$Provider"
+    $configDir = if ($InstanceDir) { Join-Path $InstanceDir 'config' } else { "$env:USERPROFILE\.claude-$Provider" }
     $env:CLAUDE_CONFIG_DIR = $configDir
-    if (-not (Test-Path $configDir)) {
-        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
-    }
+    [IO.Directory]::CreateDirectory($configDir) | Out-Null
 }
 
 # ── 如果是 OpenAI 协议，启动 LiteLLM 转换 ──
@@ -1387,6 +1492,8 @@ if ($providerProtocol -eq "openai") {
         }
     }
 
+    if ($PrepareOnly) { Write-Host '  [完成] 运行环境已准备好。'; exit 0 }
+
     # 启动 LiteLLM 代理
     $litellmInfo = Start-LiteLlmProxy `
         -TargetBaseUrl $cfg.baseUrl `
@@ -1405,7 +1512,22 @@ if ($providerProtocol -eq "openai") {
     $actualApiKey  = "litellm-proxy"  # LiteLLM 本地不需要真实 key
 }
 
+if ($PrepareOnly) { Write-Host '  [完成] 运行环境已准备好。'; exit 0 }
+
 # ── 设置环境变量（进程级，退出即消失）──
+
+if ($InstanceDir) {
+    # 只清理当前进程中继承的身份、路由和模型变量，不修改用户/系统环境。
+    foreach ($item in @(Get-ChildItem Env:)) {
+        if ($item.Name -like 'ANTHROPIC_*' -or
+            $item.Name -in @('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_USE_ANTHROPIC_AWS', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR', 'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR')) {
+            [Environment]::SetEnvironmentVariable($item.Name, $null, 'Process')
+        }
+    }
+    $env:ANTHROPIC_DEFAULT_OPUS_MODEL = $cfg.model
+    $env:ANTHROPIC_DEFAULT_SONNET_MODEL = $cfg.model
+    $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = $cfg.smallFast
+}
 
 $env:ANTHROPIC_BASE_URL         = $actualBaseUrl
 $env:ANTHROPIC_AUTH_TOKEN       = $actualApiKey
@@ -1442,14 +1564,18 @@ Write-Host ""
 
 # ── 启动 Claude Code ──
 
+$claudeExitCode = 1
 try {
     claude @args
+    $claudeExitCode = $LASTEXITCODE
 } finally {
     # ── 清理：退出时停止 LiteLLM 代理（含临时 config / 日志）──
     if ($litellmInfo) {
         Stop-LiteLlmProxy -Info $litellmInfo
     }
 }
+
+exit $claudeExitCode
 
 
 # ============================================================

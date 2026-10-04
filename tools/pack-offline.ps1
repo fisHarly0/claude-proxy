@@ -33,6 +33,11 @@ New-Item -ItemType Directory -Path $stage -Force | Out-Null
 $include = @(
     "claude-proxy.ps1",
     "setup.bat",
+    "create-launcher.bat",
+    "new-launcher.ps1",
+    "launcher-gui.ps1",
+    "launcher-support.ps1",
+    "开始使用.bat",
     "VERSION",
     "README.md",
     "TUTORIAL.md",
@@ -45,6 +50,8 @@ foreach ($f in $include) {
     Copy-Item $src (Join-Path $stage $f) -Force
     Write-Host "  + $f"
 }
+[IO.Directory]::CreateDirectory((Join-Path $stage 'tools')) | Out-Null
+Copy-Item -LiteralPath (Join-Path $root 'tools\prepare-instance.ps1') -Destination (Join-Path $stage 'tools\prepare-instance.ps1')
 
 # ── 2. Node 安装包 ──
 $nodeDir = Join-Path $stage "node"

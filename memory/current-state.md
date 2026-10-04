@@ -1,29 +1,24 @@
 # 当前状态 / Current State
 
-更新时间：2026-09-11
+更新时间：2026-10-04
 
-- 项目定位：PowerShell 启动器，把 Claude Code 路由到 Anthropic 或 OpenAI 兼容 provider。
-- 当前版本：**v1.3.0**（`VERSION` 与 `$SCRIPT_VERSION` 已对齐）。
-- 技术边界：PowerShell 5.1+、Claude Code CLI、Node；部分 provider 需要 Python + LiteLLM。
-- 真源：主脚本、provider 模板、VERSION、README/TUTORIAL、`tools/`。
-
-## 本轮变更（v1.3.0 · 新机部署顺畅化）
-
-1. **`-Doctor` 一键体检**：执行策略 / BOM / winget / node / npm / claude / git / python / `.env` 是否有 key / 磁盘 / 网络（npmmirror·npmjs·DeepSeek）/ setup.bat 编码。只读、不安装、不打印 key 明文。`setup.bat -Doctor` 可透传。
-2. **安装链加固**：`npm install -g @anthropic-ai/claude-code` 失败自动切 `registry.npmmirror.com`；winget 失败给可操作手动路径；装完 `claude --version` 冒烟；npm 全局目录已装但 PATH 未刷新时引导重开。
-3. **教程**：TUTORIAL 增「新电脑冷启动」时间线表 + 首启 Claude 说明 + 排错改口到 Doctor。
-4. **离线包**：`tools/pack-offline.ps1`（白名单拷贝 + 下 Node LTS msi + 离线说明，产出 `dist/*.zip`，**不含 `.env`**）。已实测生成 `dist/claude-proxy-offline-v1.3.0-win-x64.zip`。
-5. **发版闸门**：`tools/release-gate.ps1`（BOM/CRLF/版本一致/语法/密钥文件提醒）。本轮 **GATE PASS**。
+- 定位：Windows 新电脑、多 API 的 Claude Code 图形配置启动器，保留 claude-proxy 名称。
+- 用户最新确认：首页默认第三方自定义 API；填写必要信息后，一个按钮自动准备环境、保存独立配置并启动。
+- 版本 v1.5.0。开发基线 master / da2d492；2026-10-04 用户已要求提交并推送本轮代码、测试和 README，发布闸门通过。本轮仅同步源码，不创建正式 Release。
+- 主入口：开始使用.bat；无参数 setup.bat 也打开图形界面。create-launcher.bat / new-launcher.ps1 保留命令行入口。
+- README 已按图形版重新整理：三步开始、多 API 隔离、日常操作、Key 与更新说明；旧 CLI 折叠收纳。已检查本地链接、代码块与 diff；本次文档修改未重新运行代码测试。此前打包的 ZIP 仍含当时的 README，后续分发需重新打包。
+- UI：名称、Anthropic 兼容基础地址、模型、Key；已有配置可选择；更多选项可换存储/项目目录。后台安装、进度、取消、具体错误提示、重试；主按钮在小窗口固定底部。
+- 图形 Key 使用 Windows 当前用户 DPAPI 保存到 api-key.dpapi；留空保留旧 Key。换电脑/用户需重新输入；旧 CLI .env 继续兼容。
+- 安装优先使用官方原生发布源，manifest SHA256 校验后二进制安装；Node/npm 为后备。PrepareOnly 不进入会话；完成后启动可见 Claude 终端并尝试创建桌面快捷方式。
+- 实例仍独立配置/会话和默认工作目录；共享代码项目会共享项目文件与设置。图形入口仅支持 Anthropic 兼容；OpenAI 转换仍为命令行实验功能。
+- 验证：36 项实例回归 + 22 项后台/安装流程检查 + 8 项实际表单操作通过；PS5.1 编码/语法/版本门通过；轻量 ZIP 白名单、解压运行和源码 hash 一致性检查通过。
+- 所有 API Key 和安装器均为测试伪值/替身，没有执行真实模型调用或在本机实际安装 Claude；未在干净 Windows 新机和真实高 DPI 硬件上验收。
+- 分发包：F:\Codex\work\claude-proxy-release\20261004-v1.5.0\claude-proxy-starter-v1.5.0.zip。
+- 规格：spec/modules/instances.md、spec/modules/gui-setup.md；界面事实 PRODUCT.md、DESIGN.md；详细交接 memory/handoff-2026-10-04-gui.md。
 
 ## 接手约束
 
-- 不读取或提交 `.env`、`providers.local.ps1` 和真实 key。
-- `claude-proxy.ps1` 与 provider 模板必须保留 UTF-8 BOM；`setup.bat` 必须 CRLF 无 BOM。
-- **编辑 `claude-proxy.ps1` 后必须再跑 `tools/release-gate.ps1`**（本机编辑器易偷掉 BOM）。
-- 修改 provider 时优先扩展 `providers.local.ps1`，不要把用户配置写回主脚本。
-- 自动更新只保留现有格式校验边界；`tools/` 不随 `-Update` 分发。
-- `dist/` 已在 `.gitignore`。
-
-## 本轮状态
-
-主脚本/README/TUTORIAL/setup.bat/VERSION/tools 均已改动；**未 commit、未 push**（等用户拍板）。工作区另有此前遗留的 LiteLLM/provider 覆盖相关未提交改动，一并保留。
+- 禁止读取、回显或提交仓库 .env、providers.local.ps1 及真实 Key。测试仅使用 F 盘隔离目录内的虚构数据。
+- PowerShell 必须 UTF-8 BOM，批处理 CRLF / 无 BOM；改脚本后运行 tools/release-gate.ps1。Git diff 检查需带 core.whitespace=cr-at-eol 等设置以兼容仓库锁定的 CRLF。
+- 打包只能使用白名单。图形入口依赖完整程序文件，不可只下载主脚本；旧 -Update 不分发 GUI 或 tools。
+- 新项目 F:\Codex\projects，工作树 F:\Codex\worktrees，验证与日志 F:\Codex\work，工具缓存 F:\dev\cache。当前已有仓库继续位于 D:\AAA PROJECT\claude-proxy。

@@ -1,342 +1,214 @@
 # claude-proxy
 
-**把 Claude Code 路由到任意 AI 提供商的 PowerShell 启动脚本。** 当前版本 **v1.3.0**。
+**一台 Windows 电脑，多套 API。填好信息，点击一次“配置并启动 Claude”。**
 
-> 源码仓库：<https://github.com/fisHarly0/claude-proxy>
+给工作 API、个人 API，或同一家服务商的不同 Key，各自创建一个独立的 Claude Code 启动入口。程序负责准备运行环境、保存配置和打开 Claude；以后双击对应的桌面快捷方式即可使用。
 
-> 第一次用、不懂编程？请直接看 **[小白教程 TUTORIAL.md](./TUTORIAL.md)**，那里一步步带你跑通（含「新电脑冷启动」时间线）。本文档偏技术参考。
+**v1.5.0 开发版 · Windows · MIT**
 
-Claude Code 官方只能连接 Anthropic 的 API。如果你有 DeepSeek、Gemini、通义千问等其他 AI 服务的 API key，想在 Claude Code 里用它们，就需要一个"代理"把请求转发过去。claude-proxy 就是做这件事的——它是一个 PowerShell 脚本，帮你配置好一切环境变量，让 Claude Code 无缝连接到你选择的 AI 提供商。
+[新手教程](./TUTORIAL.md) · [源码仓库](https://github.com/fisHarly0/claude-proxy) · [反馈问题](https://github.com/fisHarly0/claude-proxy/issues)
 
-支持两种协议：
-- **Anthropic 格式**：直连，无需额外依赖（DeepSeek、MiMo、OpenRouter 等）
-- **OpenAI 格式**：自动通过 LiteLLM 做协议转换（Moonshot、智谱、通义千问、Gemini 等）
+## 三步开始
 
-> 默认使用 **DeepSeek**，走它官方的 Anthropic 协议端点直连，**不需要装 Python / LiteLLM**，对小白最省事。
+1. **完整解压程序包**，双击 `开始使用.bat`。双击 `setup.bat` 也会打开同一个窗口。
+2. 填写 **名称、API 基础地址、模型名称、API Key**。
+3. 点击 **“配置并启动 Claude”**，等待窗口提示完成。
 
----
+默认使用**第三方自定义 API**。请按服务商的 **Claude Code / Anthropic 兼容接入说明**填写地址和模型，不要把 Key 放进地址，也不要自行追加 `/messages` 或 `/chat/completions`。
 
-## 功能特性
+首次使用需联网下载。程序优先原生安装 Claude Code，**不用提前安装 Node.js 或 Python**；原生安装失败时会尝试 Node/npm 后备方式。Windows 的安装授权、Claude 的首次许可和项目信任提示仍需要你本人确认。
 
-- 一键启动：双击 `setup.bat` 即可，自动检测并安装所需依赖
-- 内置 DeepSeek（默认）+ MiMo 直连，另附若干主流 provider 模板，按需启用
-- 自定义 provider：支持任何兼容 Anthropic 或 OpenAI 格式的 API
-- 自动协议转换：OpenAI 格式的 provider 自动通过 LiteLLM 转换，无需手动操作
-- API key 管理：首次粘贴（输入不回显）后自动保存到 `.env`，下次免输入
-- 配置隔离：每个 provider 使用独立配置目录，互不干扰
-- 更新提示：默认只检查并提示新版，要不要更新由你决定（`-Update` 手动更新）
-- 零污染：环境变量仅在当前进程生效，退出即消失
+> 请使用包含图形入口的 v1.5.0 程序包或完整源码，不要只下载一个 `.ps1` 文件。当前版本已完成本地验证，尚未发布正式版本。
 
----
+## 点下按钮后会做什么
 
-## 技术栈
+- 保存这套 API 的连接信息，并加密保存 Key。
+- 检查 Claude Code 是否可用，缺少时尝试自动安装。
+- 创建独立的 Claude 配置目录和默认代码目录。
+- 尝试创建桌面快捷方式，并打开 Claude Code。
 
-| 技术 | 用途 |
-|------|------|
-| PowerShell 5.1+ | 主脚本语言（Windows 自带） |
-| Claude Code CLI | AI 编程助手本体 |
-| Node.js | Claude Code 运行环境 |
-| Python + LiteLLM | OpenAI 协议转换（**仅 OpenAI 格式 provider 需要**；默认的 DeepSeek 不需要） |
-| Git | 项目代码管理（非必需） |
-| winget | Windows 包管理器，自动安装依赖 |
+准备过程在后台进行，窗口会显示当前步骤。可以取消；失败后会提示原因，修正后点击重试，已经保存的配置会保留。
 
----
+**打开 Claude 不等于 API 已验证成功。** 实际能否对话、流式输出和调用工具，还取决于服务商接口、模型能力及账号权限。
 
-## 快速开始
+## 多个 API，分别使用
 
-### 方法一：双击启动（推荐小白）
+例如，你可以创建“工作用”“个人用”“备用”三套配置。它们可以同时启动，也可以来自同一家服务商、使用不同的 Key。Claude Code 程序只需安装一份。
 
-1. 打开仓库页面 → 绿色 **`Code`** 按钮 → **`Download ZIP`** → 解压到一个你方便找到的文件夹（如 `D:\claude-proxy`）
-2. 进入解压出来的文件夹，**双击 `setup.bat`**
+| 内容 | 如何保存 |
+| --- | --- |
+| API 地址、模型 | 每个实例自己的 `profile.json` |
+| API Key | 图形入口加密保存到各自的 `api-key.dpapi` |
+| Claude 用户配置与会话 | 每个实例自己的 `config/` |
+| 默认代码目录 | 每个实例自己的 `workspace/` |
+| 启动入口 | 各自的 `launch.bat` 和桌面快捷方式 |
 
-> **不要**在浏览器里对 `claude-proxy.ps1` 单独用"另存为"。该文件依赖 UTF-8 BOM，浏览器/记事本另存极易丢 BOM 或存成 `.txt`，导致中文乱码、双击闪退。请用 Download ZIP（走 git 原始字节，编码不会坏）。
+默认目录如下，也可以在“更多选项”中更换保存位置：
 
-首次运行时脚本会自动：
-- 放开 PowerShell 执行策略（仅当前用户）
-- 检测 Node.js / Claude Code CLI / Git，缺什么用 winget 装什么
-- 弹出提示让你粘贴 API key（输入不会显示是正常的），保存到 `.env`（下次不再问）
-- 只有使用 OpenAI 协议的 provider 时，才会自动装 Python + LiteLLM
-
-> 运行只需要 `setup.bat` + `claude-proxy.ps1` 两个文件；`providers.local.example.ps1` 是可选模板。
-
-### 方法二：命令行启动
-
-```powershell
-# 使用默认 provider（deepseek，Anthropic 格式直连）
-.\claude-proxy.ps1
-
-# 切换到其它 provider
-.\claude-proxy.ps1 -Provider mimo
-
-# 列出所有可用 provider
-.\claude-proxy.ps1 -List
-
-# 一键体检（新电脑部署不顺时先跑这个）
-.\claude-proxy.ps1 -Doctor
-
-# 显示帮助
-.\claude-proxy.ps1 -Help
+```text
+launchers/
+├── 工作用/
+│   ├── launch.bat          # 双击启动这一套 API
+│   ├── profile.json        # 接口、模型与工作目录
+│   ├── api-key.dpapi       # 加密 Key
+│   ├── config/             # Claude 用户配置与会话
+│   ├── workspace/          # 默认代码目录
+│   ├── claude-proxy.ps1    # 此实例的运行脚本
+│   ├── VERSION
+│   └── LICENSE
+└── 个人用/
+    └── ...                 # 另一套独立配置
 ```
 
----
+配置隔离使用 Claude Code 的 [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars)。如果在“更多选项 → 代码项目”中选择同一个已有项目，两个实例仍会共享项目文件及项目级 Claude 设置。独立配置目录并不是文件访问沙箱。
 
-## 项目结构
+## 日常使用
 
-```
-claude-proxy/
-├── claude-proxy.ps1              # 主脚本（-Update 时会覆盖此文件）
-├── setup.bat                     # 一键启动器（双击即可；失败会提示跑 -Doctor）
-├── providers.local.example.ps1   # 自定义/扩展 provider 的模板
-├── providers.local.ps1           # 你的自定义 provider（更新不覆盖，已在 .gitignore）
-├── .env                          # API key 存储（更新不覆盖，已在 .gitignore，运行时自动生成）
-├── VERSION                       # 版本号文件
-├── tools/
-│   ├── release-gate.ps1          # 发版前编码/版本/语法闸门
-│   └── pack-offline.ps1          # 生成新电脑离线安装包 ZIP
-├── .gitignore                    # Git 忽略规则
-├── .gitattributes                # Git 换行符规则（锁定 CRLF / BOM）
-├── LICENSE                       # MIT 许可证
-├── TUTORIAL.md                   # 小白教程（含新电脑冷启动时间线）
-└── README.md                     # 本文件
-```
+| 想做什么 | 怎么操作 |
+| --- | --- |
+| 再次启动 | 双击桌面的 `Claude - 名称`，或实例目录里的 `launch.bat` |
+| 添加另一个 API | 打开图形入口，顶部选“新增一套自定义 API”，填写不同名称 |
+| 修改地址或模型 | 先退出对应 Claude，选择已有配置，修改后点“配置并启动 Claude” |
+| 更换 Key | 选择已有配置，填写新 Key；留空则保留原来的 Key |
+| 使用已有代码项目 | 在“更多选项 → 代码项目”中选择文件夹 |
+| 安装失败后重试 | 查看窗口提示和安装日志，修正后再次点击主按钮 |
+| 中途停止 | 点击“取消准备”，已保存的配置会保留 |
 
----
+### 移动和更新
 
-## 使用说明
+**同一电脑内搬家：** 退出对应 Claude，移动整个实例文件夹，不要只移动 `launch.bat`。在图形入口选择新的保存位置，再选择该实例。原桌面快捷方式可能仍指向旧路径，可直接使用新位置的 `launch.bat`；自选项目的绝对路径也需要检查。
 
-> 完整的"手把手"步骤在 [TUTORIAL.md](./TUTORIAL.md)。下面是命令行速查。
+**换电脑或 Windows 用户：** 图形 Key 绑定原 Windows 用户，不能保证跨电脑解密。请在新电脑的图形入口重新填写 Key。
 
-### 基本用法
+**更新整个工具：** 获取完整新版程序文件，保留已有实例文件夹。用新版图形入口选择已有配置并启动，会更新该实例的主脚本和版本文件，保留 Key、会话和代码。也可以退出实例后手动复制新版 `claude-proxy.ps1` 和 `VERSION` 到实例目录。
 
-```powershell
-# 使用默认 provider（deepseek，直连）
-.\claude-proxy.ps1
+旧命令行的 `-Update` 只更新主脚本，不会升级图形入口或 `tools/`；实例模式不接受 `-Update`。
 
-# 使用其它已注册 provider
-.\claude-proxy.ps1 -Provider mimo
+## 接口支持范围
 
-# 覆盖模型
-.\claude-proxy.ps1 -Provider deepseek -Model deepseek-v4-flash
+| 接口类型 | 入口与状态 |
+| --- | --- |
+| Anthropic 兼容 API | 图形入口支持直连，请使用服务商给出的 Claude Code 接入地址 |
+| 只有 OpenAI 格式的 API | 仅保留命令行的 LiteLLM 实验转换，不保证 Claude Code 工具调用兼容 |
+| Claude 订阅登录 | 当前图形流程面向 API Key 配置，不管理订阅账号切换 |
 
-# 使用共享配置（~/.claude）而非隔离目录
-.\claude-proxy.ps1 -SharedConfig
+本项目负责本机配置、环境准备和独立启动。它不会给一个不兼容的 API 自动补齐 Claude Code 所需的能力，也不提供模型额度或 API Key。
 
-# 指定工作目录
-.\claude-proxy.ps1 -WorkDir "C:\my\project"
+## Key 如何保存
 
-# 列出所有可用 provider / 显示帮助
-.\claude-proxy.ps1 -List
-.\claude-proxy.ps1 -Help
-```
+图形入口使用 Windows 当前用户的 **DPAPI 加密**，Key 不会写入进程命令行或安装日志。不要把配置好的整个实例文件夹发给别人，里面还可能包含会话和项目数据。
 
-### 临时使用自定义端点
+旧命令行入口仍支持明文 `.env`；存在 `api-key.dpapi` 时优先使用加密 Key。图形版换 Key 请直接在窗口操作，删除 `.env` 不会更换已保存的加密 Key。
 
-不想注册 provider，临时用一下：
-
-```powershell
-.\claude-proxy.ps1 -Provider custom -BaseUrl "https://api.example.com/v1" -ApiKey "sk-xxx" -Model "xxx" -Protocol openai
-```
-
-### 添加自己的 Provider（唯一推荐方式）
-
-**在 `providers.local.ps1` 里加，不要改主脚本 `claude-proxy.ps1`**（主脚本会被 `-Update` 覆盖，你的改动会丢；`providers.local.ps1` 永远不会被动）。
-
-1. 把 `providers.local.example.ps1` 复制一份，改名为 `providers.local.ps1`
-2. 编辑 `providers.local.ps1`，取消注释一个示例块、或在 `$LocalProviders` 哈希表里填入你的 provider：
-
-```powershell
-$LocalProviders = @{
-    "my-provider" = @{
-        baseUrl   = "https://your-api-endpoint.com/v1"   # 你的 API 地址
-        apiKey    = "PASTE_YOUR_MY-PROVIDER_KEY_HERE"     # 留占位符即可，首次运行会提示粘贴
-        model     = "your-model-name"                     # 模型名
-        smallFast = "your-model-name"                     # 小型快速模型（可与上面相同）
-        label     = "我的 Provider"                        # 显示名称
-        protocol  = "anthropic"                           # anthropic 或 openai
-        signupUrl = "https://..."                         # 可选：申请 key 的网址
-    }
-}
-# 可选：覆盖默认 provider
-# $LocalDefaultProvider = "my-provider"
-```
-
-**protocol 怎么选？**
-- 你的 API 端点兼容 Anthropic 格式 → `"anthropic"`（直连，无需额外依赖）
-- 你的 API 端点是 OpenAI 格式 → `"openai"`（脚本自动起 LiteLLM 转换，需要 Python）
-
----
-
-## 配置选项
-
-### 命令行参数
-
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `-Provider` | provider 名称 | `-Provider mimo` |
-| `-BaseUrl` | 自定义 API 端点 | `-BaseUrl "https://..."` |
-| `-ApiKey` | 自定义 API key | `-ApiKey "sk-xxx"` |
-| `-Model` | 覆盖模型名 | `-Model deepseek-v4-flash` |
-| `-SmallFastModel` | 小型快速任务模型 | `-SmallFastModel "fast-model"` |
-| `-Protocol` | 协议类型 | `-Protocol openai` |
-| `-SharedConfig` | 使用共享配置目录 | `-SharedConfig` |
-| `-WorkDir` | 指定工作目录 | `-WorkDir "C:\project"` |
-| `-List` | 列出所有 provider | `-List` |
-| `-Doctor` | 一键体检环境/网络/编码 | `-Doctor` |
-| `-Help` | 显示帮助（`-h` 同义） | `-Help` |
-| `-SkipChecks` | 跳过依赖检查 | `-SkipChecks` |
-| `-Update` | 手动下载并应用更新 | `-Update` |
-| `-SkipUpdate` | 跳过本次更新检查 | `-SkipUpdate` |
-| `-LiteLlmPort` | LiteLLM 代理端口（0=自动） | `-LiteLlmPort 8080` |
-
-### 环境变量
-
-脚本会设置以下进程级环境变量（退出即消失）：
-
-| 变量 | 说明 |
-|------|------|
-| `ANTHROPIC_BASE_URL` | API 端点地址 |
-| `ANTHROPIC_AUTH_TOKEN` | API key |
-| `ANTHROPIC_MODEL` | 默认模型 |
-| `ANTHROPIC_SMALL_FAST_MODEL` | 小型快速模型 |
-
-### 预置 Provider
-
-主脚本 `claude-proxy.ps1` 里**开箱即用、无需任何配置**的只有两个（均为 Anthropic 直连），不传 `-Provider` 时默认走 DeepSeek：
-
-| Provider | 协议 | 默认模型 | 小型快速模型 | 说明 |
-|----------|------|----------|--------------|------|
-| `deepseek` | Anthropic | `deepseek-v4-pro` | `deepseek-v4-flash` | DeepSeek 官方 Anthropic 端点，直连无需 LiteLLM（默认 provider） |
-| `mimo` | Anthropic | `mimo-v2.5-pro` | `mimo-v2.5-pro` | 小米 MiMo，国内直连 |
-
-其余 provider 以**注释模板**形式提供（默认未启用），需要复制进 `providers.local.ps1` 并取消注释后才能用。`providers.local.example.ps1` 里随脚本附带的模板有：
-
-| Provider | 协议 | 默认模型 | 说明 |
-|----------|------|----------|------|
-| `openrouter` | Anthropic | `anthropic/claude-sonnet-4` | 多模型聚合，直连 |
-| `gemini` | OpenAI | `gemini-2.5-pro` | Google Gemini（需 LiteLLM 转换） |
-| `moonshot` | OpenAI | `moonshot-v1-128k` | 月之暗面 Kimi（需 LiteLLM 转换） |
-| `zhipu` | OpenAI | `glm-4-plus` | 智谱 GLM（需 LiteLLM 转换） |
-| `qwen` | OpenAI | `qwen-max` | 阿里云通义千问 DashScope（需 LiteLLM 转换） |
-
-> 主脚本注释区里还另带 `baichuan`（百川智能）、`local-openai`（Ollama 等本地 OpenAI 兼容服务）两个示例块，可参照同样方式抄进 `providers.local.ps1`。
->
-> **启用方式不是去改主脚本**（主脚本会被 `-Update` 覆盖），**而是把对应块复制进 `providers.local.ps1` 后取消注释**（见上方"添加自己的 Provider"）。
-
----
-
-## 自动更新
-
-- **默认行为：只检查、只提示，不自动下载执行。** 每次启动最多每 12 小时联网比对一次版本号，发现新版只打印一行提示，更新与否由你决定。
-- 手动更新：`.\claude-proxy.ps1 -Update`（下载并替换主脚本后用新版重启），或直接去 GitHub 重新下载 ZIP。
-- 多镜像顺序尝试（jsdelivr → gh-proxy.com → kkgithub → GitHub 官方），全部连不上就静默跳过，绝不卡住启动。
-- 下载后做"非空 + 含版本标记 + 语法可解析"的**格式校验**，旧版按版本号备份为 `claude-proxy.<旧版本>.bak`。
-- **安全说明**：`-Update` 从上述公开镜像拉取，仅做格式校验，**不验证数字签名**（不防"镜像被投毒"这类来源伪造）。如果你对供应链安全敏感，请只用"去 GitHub 手动下载"的方式更新。
-- 更新只替换 `claude-proxy.ps1` 本身，`.env`、`providers.local.ps1`、`setup.bat` 都不动。
-- 注意：`README.md` / `TUTORIAL.md` / `tools/` **不随 `-Update` 分发**，文档与工具最新版以 GitHub 仓库为准。
-
----
-
-## 国内网络 / 新电脑加固
-
-- **npm 装 Claude Code**：默认源失败会自动改用 `registry.npmmirror.com` 再试一次。
-- **winget 装 Node**：失败会给出官网 + npmmirror 手动安装路径，装完重新双击 `setup.bat`。
-- **安装冒烟**：`claude` 装好后会跑一次 `claude --version`，避免"命令在但包半残"。
-- **离线包**（维护者用）：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\pack-offline.ps1
-# 或优先国内镜像下 Node：
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\pack-offline.ps1 -NodeMirror
-```
-
-产出 `dist/claude-proxy-offline-v*-win-x64.zip`（含 Node msi + 脚本 + 离线说明；**绝不打包 `.env`**）。
-
----
-
-## 安全须知
-
-- **API key 等同账号密码。** 录入时不回显（屏幕看不到是正常的），保存在脚本同目录 `.env`，并尽量收紧文件权限为仅当前用户可读。
-- `.env` 是明文存储。**不要把整个文件夹打包发给别人 / 传网盘**；求助时只发报错文本，别截到含 key 的窗口。
-- 使用 OpenAI 协议 provider 时，上游真实 key 通过临时配置文件 + 环境变量传给 LiteLLM，**不会出现在进程命令行里**（避免被同机其它进程看到）。
-- 自动更新默认不执行远程代码（见上一节）。
-
----
+原生安装从官方发布源下载，并校验发布清单中的 SHA256 后才运行文件。下载被网络或组织策略阻止时，自动安装仍可能失败。安装方式参考 [Claude Code 官方说明](https://code.claude.com/docs/en/setup)。
 
 ## 常见问题
 
-更完整的排错见 [TUTORIAL.md](./TUTORIAL.md#遇到问题怎么办)。
+**点开后没有窗口？** 先确认已完整解压，使用 Windows 10/11 的 64 位环境，并保留 `tools/` 文件夹。不要在 ZIP 内直接运行，也不要单独下载主脚本。
 
-### 提示"无法加载脚本"或"在此系统上禁止运行脚本"
+**名称已存在？** 在窗口顶部选择已有配置，或为新的 API 换一个名字，程序不会覆盖同名新实例。
 
-运行一次：
+**安装失败？** 点击“查看安装日志”，检查网络和系统安装限制，再重试。完整排错步骤见 [新手教程](./TUTORIAL.md#没成功怎么办)。
+
+**Claude 打开了，但认证失败或不能调用工具？** 检查 Key、额度、模型权限及接口协议。程序能启动只说明本机准备完成，不能证明上游 API 兼容。
+
+**没有桌面快捷方式？** 可以直接双击实例文件夹中的 `launch.bat`。
+
+## 命令行用法
+
+图形入口之外，仍保留独立启动器生成和旧 Provider 模式。以下命令在仓库目录的 PowerShell 中运行。
+
+<details>
+<summary>生成独立启动器</summary>
+
+双击 `create-launcher.bat`，按文字提示操作；或使用参数生成。下面的地址和模型是占位示例，请替换：
+
 ```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+.\new-launcher.ps1 -Name work-api -BaseUrl 'https://api.example.com/anthropic' `
+  -Model 'your-model-id' -OutputDir 'F:\ClaudeInstances' -NonInteractive
 ```
-或者直接用 `setup.bat`，它通常会自动处理（若被组策略锁定则可能仍需手动设置）。
 
-### 新电脑部署失败 / 不知道卡在哪
+生成器不会复制已有 Key，也不覆盖同名目录。双击生成的 `launch.bat` 后，首次安全输入 Key，保存到该实例的明文 `.env`。使用 OpenAI 实验转换时，生成命令加 `-Protocol openai`。
 
 ```powershell
-.\claude-proxy.ps1 -Doctor
-# 或
-setup.bat -Doctor
+# 从已生成的实例启动，并临时指定代码项目
+.\claude-proxy.ps1 -InstanceDir 'F:\ClaudeInstances\work-api' -WorkDir 'F:\Projects\demo'
 ```
 
-逐项绿/黄/红 + 修复建议；求助时复制完整输出（不含 API key 明文）。  
-更完整的冷启动对照表见 [TUTORIAL.md · 新电脑冷启动](./TUTORIAL.md)。
+`-InstanceDir` 不能与 `-Provider`、连接覆盖参数、`-SharedConfig` 或 `-Update` 混用。连接信息保存在实例的 `profile.json` 中。
 
-### 如何验证代理是否生效？
+</details>
 
-启动 Claude Code 后输入 `/model`，显示的模型名应该与你配置的一致。
+<details>
+<summary>旧 Provider 模式和参数</summary>
 
-### 怎么回退到旧版本？
+```powershell
+# 指定内置 provider；名称存在不代表当前账号或模型已经验证可用
+.\setup.bat -Provider deepseek
+.\setup.bat -Provider mimo
 
-`-Update` 更新时旧版会按版本号备份为 `claude-proxy.<旧版本>.bak`。挑你要回退的那一份，改名回 `claude-proxy.ps1` 即可。
-
-### 更新后自定义 provider 丢了？
-
-不会。`providers.local.ps1` 永远不会被 `-Update` 覆盖。如果丢了，检查是否误删了这个文件。
-
----
-
-## 协议转换原理
-
-对于只提供 OpenAI 格式 API 的 provider，脚本会自动：
-
-```
-Claude Code → Anthropic 协议 → LiteLLM (本地) → OpenAI 协议 → 目标 AI
+# 查看可用配置、帮助与环境体检
+.\setup.bat -List
+.\setup.bat -Help
+.\setup.bat -Doctor
 ```
 
-- 自动检测 Python 和 LiteLLM proxy 依赖是否可用，首次使用自动安装（`python -m pip install "litellm[proxy]"`）
-- 起本地代理时自动选空闲端口，上游 key 走临时配置 + 环境变量（不上命令行）
-- Claude Code 退出时自动停止代理并清理临时文件
-- 默认的 DeepSeek 是 Anthropic 直连，**不经过这条链路**，无需 Python
+旧模式直接运行主脚本、不传 `-Provider` 时仍默认 DeepSeek。各服务商使用不同配置目录，但同一家服务商的不同 Key 不会自动分开；需要多套 Key 时请使用独立实例。
 
----
+添加自定义 Provider：复制 [providers.local.example.ps1](./providers.local.example.ps1) 为 `providers.local.ps1`，按模板填写地址、模型和协议。Key 留占位符可在首次启动时输入；不要把真实 Key 提交到仓库，也不要直接修改会被更新覆盖的主脚本。模板中的模型名称仅是配置示例，以服务商当前提供的信息为准。
 
-## 贡献
+| 参数 | 用途 |
+| --- | --- |
+| `-Provider` | 选择已注册的 Provider |
+| `-BaseUrl`、`-Model`、`-SmallFastModel` | 覆盖地址、主模型和快速模型 |
+| `-ApiKey` | 旧入口支持的显式 Key 参数；日常使用优先选图形输入，避免 Key 进入命令历史 |
+| `-Protocol` | `anthropic` 直连或 `openai` 实验转换 |
+| `-WorkDir` | 指定已有代码项目 |
+| `-SharedConfig` | 旧模式使用共享 Claude 配置目录 |
+| `-InstanceDir` | 使用独立实例目录 |
+| `-PrepareOnly` | 准备运行环境，不进入 Claude 会话，供图形后台调用 |
+| `-SkipChecks`、`-SkipUpdate` | 跳过依赖检查或主脚本更新检查 |
+| `-LiteLlmPort` | OpenAI 实验代理端口，`0` 表示自动选择 |
+| `-Update` | 旧模式手动更新主脚本，不升级图形入口 |
 
-欢迎提交 Issue 和 Pull Request。
+旧模式默认只检查并提示脚本更新。`-Update` 经公开镜像下载，仅进行格式和语法校验，不验证发布签名；需要可核对来源时请获取完整源码更新。它保留旧脚本备份，不覆盖本地 `.env` 或 `providers.local.ps1`。
 
-**发布新版流程：**
+</details>
 
-1. 修改 `claude-proxy.ps1` 顶部的 `$SCRIPT_VERSION` 和根目录 `VERSION` 文件（**同时改**）
-2. **【发版前必做·闸门】** 在仓库根目录执行：
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\release-gate.ps1
-   ```
-   闸门会检查：BOM（`claude-proxy.ps1` / 模板必须 UTF-8 BOM）、`setup.bat` 无 BOM + CRLF、`VERSION` 与 `$SCRIPT_VERSION` 一致、PowerShell 语法可解析。**任一 FAIL 禁止发版。**
-3. 手工抽查（闸门之外）：
-   ```powershell
-   (Get-Content .\claude-proxy.ps1 -Encoding Byte -TotalCount 3) -join ','   # 期望 239,187,191
-   ```
-4. commit + push 到 `master`
-5. 用户下次启动会收到"有新版"提示，运行 `-Update` 或重新下载即可升级。
-   - 注意：`-Update` 只分发 `claude-proxy.ps1` + `VERSION`。若本次改了 `README` / `setup.bat` / `tools/`，请在 release notes 里提醒用户重新下载整个仓库。
+## 开发与验证
 
-> **编码铁律**：`claude-proxy.ps1`、`providers.local.example.ps1` 必须存成 **UTF-8 with BOM**（PS 5.1 需要 BOM 才能正确解码中文）；`setup.bat` 必须是 **CRLF 换行、无 BOM**。以 `tools/release-gate.ps1` 为准，不要只靠记忆。
+图形界面使用 Windows Forms，运行于 Windows 自带的 PowerShell 5.1。程序入口、后台准备和实例运行分别位于：
 
----
+| 文件 | 职责 |
+| --- | --- |
+| `开始使用.bat` / `setup.bat` | 图形入口；`setup.bat` 带参数时保留旧用法 |
+| `launcher-gui.ps1` | 表单、状态、取消与启动 |
+| `launcher-support.ps1` | 保存配置、加密 Key、创建快捷方式 |
+| `tools/prepare-instance.ps1` | 后台准备任务 |
+| `claude-proxy.ps1` | 依赖安装、实例隔离与 Claude 启动 |
+| `new-launcher.ps1` / `create-launcher.bat` | 命令行生成独立实例 |
+| `tools/pack-starter.ps1` | 白名单打包轻量使用包，首次运行仍需联网 |
+
+本地验证记录：**36 项实例回归、22 项配置与安装流程检查、8 项实际表单操作检查通过**，另通过编码、语法、版本与打包检查。测试使用虚构 Key、模拟 Claude 和安装器；**尚未完成干净 Windows 新机的真实安装、真实 API/工具调用及真实高 DPI 硬件验收**。
+
+复现检查（临时目录可以自行指定）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-instances.ps1 -ScratchDir 'F:\claude-proxy-tests'
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-gui-setup.ps1 -ScratchDir 'F:\claude-proxy-tests'
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-window.ps1 -ScratchDir 'F:\claude-proxy-tests'
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\release-gate.ps1
+```
+
+打包给新电脑：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\pack-starter.ps1 -OutDir 'F:\claude-proxy-packages'
+```
+
+打包使用文件白名单，不包含实例、Key 和缓存。`pack-offline.ps1` 另可附带 Node 安装包，但**不等于包含 Claude Code 的完整离线安装环境**。
+
+修改 PowerShell 文件时保留 **UTF-8 BOM**，批处理使用 **CRLF、无 BOM**；同步主脚本版本与 `VERSION`，运行发布检查后再分发。不要用真实 Key 跑测试。
 
 ## 许可证
 

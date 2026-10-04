@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-04T15:40:29.6675726+08:00",
+  "title": "Design System: claude-proxy",
+  "extensions": {},
+  "components": [],
+  "narrative": {
+    "northStar": "",
+    "overview": "当前界面采用 Windows 原生操作工具（Operate）方向：白底、深色文字、系统控件和一个深绿主按钮。视觉层级服务于填写 API 信息并启动独立实例，不设营销展示区。界面面向 Windows 新手，主要输入直接可见，目录设置收在“更多选项”中。\n\n本文件记录 `launcher-gui.ps1` 的已实现样式，产品约束来自 `PRODUCT.md`，交互范围来自 `spec/modules/gui-setup.md`。没有另行命名创意隐喻。Windows 主题、字体可用性及 DPI 会影响原生控件的最终呈现。",
+    "keyCharacteristics": [
+      "原生 Windows Forms 控件与系统焦点、禁用状态。",
+      "单列输入、一个固定在底部的主要操作。",
+      "Key 密文输入；状态文字、进度条、取消和重试提供反馈。"
+    ],
+    "rules": [],
+    "dos": [
+      "Do 保留一个主要操作，并让小高度窗口中的主按钮持续可见。",
+      "Do 使用原生控件状态、可见标签与明确状态文字说明当前动作。",
+      "Do 将 Key 保持为密文输入，保持日志与截图不包含真实 Key。",
+      "Do 以当前系统主题和 DPI 下的实际窗口检查布局。"
+    ],
+    "donts": [
+      "Don't 将原生控件误写为网页组件或声称存在移动端断点。",
+      "Don't 为记录当前界面而添加不存在的圆角、阴影、色阶或动效。",
+      "Don't 把“已打开 Claude”描述成真实 API 验证成功。"
+    ]
+  }
+}
